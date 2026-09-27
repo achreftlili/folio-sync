@@ -125,7 +125,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 </head>
 <body>
 <header class="bar"><div class="wrap">
-  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync <small style="font-weight:500;color:var(--muted);font-size:12px">v7</small></div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync <small style="font-weight:500;color:var(--muted);font-size:12px">v8</small></div>
   <div class="chip" id="chip"><span class="led" id="chipLed"></span><span id="chipText">No Folio paired</span></div>
 </div></header>
 
@@ -241,7 +241,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
    ================================================================ */
 
 // ---------- small helpers ----------
-const APP_VERSION = 'v7 (Spark reconnect rounds)';
+const APP_VERSION = 'v8 (Spark reconnect fix)';
 const $ = id => document.getElementById(id);
 const hex = a => Array.from(a, b => b.toString(16).padStart(2, '0')).join(' ');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -769,17 +769,23 @@ async function sparkDownloadOne(L, d) {
 
 async function syncSpark(device) {
   const d = S.dev; let got = 0, total = null, round = 0, refused = 0;
-  const deadline = Date.now() + 90000;
+  const deadline = Date.now() + 120000;
   const prompt = () => got
     ? `Page ${got}${total ? ' of ' + total : ''} saved. Press the Spark's button once for the next page…`
     : 'Press the Spark\'s button once now…';
   try {
-    while (Date.now() < deadline && round < 40) {
+    while (Date.now() < deadline && round < 60) {
       round++;
       const L = new WacomLink(device);
       setStatus(prompt(), '', 'blue');
       try { await L.connect(Math.max(3000, deadline - Date.now()), () => setStatus(prompt(), '', 'blue')); }
-      catch (e) { log('no connection: ' + e.message); break; }
+      catch (e) {
+        // Often the Spark's previous connection is still closing; just try again.
+        log('no connection yet: ' + e.message);
+        L.disconnect();
+        if (Date.now() > deadline) break;
+        await sleep(1200); round--; continue;
+      }
       try {
         await Proto.connectWithKey(L, d.key, d.proto);
         L.msgs = [];
@@ -788,7 +794,7 @@ async function syncSpark(device) {
         if (!(m && m.op === 0xb3 && m.data[0] === 0)) {
           refused++;
           log(`Spark not ready (e3 → ${m ? m.op.toString(16) + ' ' + hex(m.data) : 'no reply'}); waiting for it to reconnect after a button press`);
-          L.disconnect(); await sleep(700); continue;
+          L.disconnect(); await sleep(2000); continue;
         }
         setStatus('Connected, reading pages…', '', 'amber');
         await L.req(0xb1, [1]);
