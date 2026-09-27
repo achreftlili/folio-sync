@@ -125,7 +125,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 </head>
 <body>
 <header class="bar"><div class="wrap">
-  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync</div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync <small style="font-weight:500;color:var(--muted);font-size:12px">v7</small></div>
   <div class="chip" id="chip"><span class="led" id="chipLed"></span><span id="chipText">No Folio paired</span></div>
 </div></header>
 
@@ -241,6 +241,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
    ================================================================ */
 
 // ---------- small helpers ----------
+const APP_VERSION = 'v7 (Spark reconnect rounds)';
 const $ = id => document.getElementById(id);
 const hex = a => Array.from(a, b => b.toString(16).padStart(2, '0')).join(' ');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -687,7 +688,7 @@ async function startWatching() {
   if (!dev.__folioListener) {
     dev.addEventListener('advertisementreceived', () => {
       Auto.lastAdv = Date.now();
-      if (S.auto && !S.busy && Date.now() - Auto.lastSync > 20000 && document.visibilityState === 'visible') {
+      if (S.auto && !S.busy && S.dev && S.dev.proto !== P.SPARK && Date.now() - Auto.lastSync > 20000 && document.visibilityState === 'visible') {
         log('Folio is awake → automatic sync');
         sync({ auto: true });
       }
@@ -720,6 +721,111 @@ function waitForAdvert(ms) {
   });
 }
 
+// ---------- Bamboo Spark sync ----------
+// The Spark only hands over pages on a connection that it opened in response
+// to a button press. When it isn't ready it answers e3 with "general error"
+// and hangs up; it then reconnects when the button is pressed. So we work in
+// rounds: connect → key → e3. If e3 is refused we drop the link and wait for
+// the next connection. Each accepted connection downloads as many pages as the
+// Spark allows (often one), then we start another round.
+async function sparkDownloadOne(L, d) {
+  let ts = Date.now();
+  L.msgs = [];
+  await L.send(0xc5, [0]);
+  for (let k = 0; k < 3; k++) {
+    const m = await L.next(1500); if (!m) break;
+    if (m.op === 0xb3) { if (m.data[0] !== 0) throw new DeviceError(m.data[0]); continue; }
+    if (m.op === 0xcd) { ts = bcdTime(m.data); break; }
+  }
+  L.pen = []; L.lastPen = Date.now();
+  const st = await L.req(0xc3, [0], { expect: [0xc8] });
+  if (st.data[0] !== 0xbe) throw new Error('Unexpected download start ' + hex(st.data));
+  let crc = null;
+  while (crc == null) {
+    const m = await L.next(5000);
+    if (!m) { if (Date.now() - L.lastPen > 5000) throw new Error('Page download stalled'); continue; }
+    if (m.op === 0xc8 && m.data[0] === 0xed) {
+      const m2 = await L.next(5000);
+      if (m2 && m2.op === 0xc9) crc = parseInt(hex(m2.data).replace(/ /g, ''), 16) >>> 0; else throw new Error('Missing checksum');
+    } else log('ignored message ' + m.op.toString(16));
+  }
+  let data = L.pen;
+  if (crc32(data) !== crc) { await sleep(800); data = L.pen; }
+  if (crc32(data) !== crc) throw new Error(`Checksum mismatch (${data.length} bytes). Nothing was deleted; try again.`);
+  log(`page: ${data.length} bytes, crc ok`);
+  await Store.put({
+    id: `${ts}-${crc.toString(16)}`, created: ts, synced: Date.now(),
+    w: d.w, h: d.h, ps: d.ps, pmax: 1023, rot: S.defRot,
+    strokes: parsePenData(data).map(s => s.flat()), raw: Array.from(data),
+  });
+  await loadPages();
+  if (!Store.ok) return 'kept';
+  await sleep(300);
+  L.msgs = [];
+  await L.send(0xca, [0]);
+  try { const r = await L.next(1200); if (r) log(`delete reply ${r.op.toString(16)} ${hex(r.data)}`); } catch (e) { if (!(e instanceof GoneError)) throw e; }
+  return 'ok';
+}
+
+async function syncSpark(device) {
+  const d = S.dev; let got = 0, total = null, round = 0, refused = 0;
+  const deadline = Date.now() + 90000;
+  const prompt = () => got
+    ? `Page ${got}${total ? ' of ' + total : ''} saved. Press the Spark's button once for the next page…`
+    : 'Press the Spark\'s button once now…';
+  try {
+    while (Date.now() < deadline && round < 40) {
+      round++;
+      const L = new WacomLink(device);
+      setStatus(prompt(), '', 'blue');
+      try { await L.connect(Math.max(3000, deadline - Date.now()), () => setStatus(prompt(), '', 'blue')); }
+      catch (e) { log('no connection: ' + e.message); break; }
+      try {
+        await Proto.connectWithKey(L, d.key, d.proto);
+        L.msgs = [];
+        await L.send(0xe3, [0]);
+        const m = await L.next(1500);
+        if (!(m && m.op === 0xb3 && m.data[0] === 0)) {
+          refused++;
+          log(`Spark not ready (e3 → ${m ? m.op.toString(16) + ' ' + hex(m.data) : 'no reply'}); waiting for it to reconnect after a button press`);
+          L.disconnect(); await sleep(700); continue;
+        }
+        setStatus('Connected, reading pages…', '', 'amber');
+        await L.req(0xb1, [1]);
+        const c = await L.req(0xc1, [0], { expect: [0xc2] });
+        const left = c.data[0] << 8 | c.data[1];
+        if (total == null) total = left;
+        log(`${left} page(s) left on the Spark`);
+        if (!left) { L.disconnect(); break; }
+        for (;;) {
+          setStatus(`Downloading page ${got + 1}${total ? ' of ' + total : ''}…`, '', 'amber');
+          setProgress(total ? got / total : null);
+          const r = await sparkDownloadOne(L, d);
+          got++;
+          if (r === 'kept' || (total && got >= total)) break;
+        }
+        L.disconnect();
+        if (total && got >= total) break;
+        await sleep(500);
+      } catch (e) {
+        L.disconnect();
+        if (e instanceof DeviceError && e.code === 7) throw e;
+        if (e instanceof GoneError || e instanceof DeviceError || /GATT/.test(e.message || '')) { log('round ended: ' + e.message); await sleep(500); continue; }
+        throw e;
+      }
+    }
+    setProgress(null);
+    if (total === 0 || (total == null && refused === 0)) setStatus(`Connected. No new pages on the ${d.name || 'Spark'}.`, 'ok', 'on');
+    else if (total && got >= total) setStatus(`Synced ${got} page${got === 1 ? '' : 's'}.`, 'ok', 'on');
+    else if (got) setStatus(`Synced ${got} page${got === 1 ? '' : 's'}${total ? ' of ' + total : ''}. Tap Sync pages again for the rest.`, 'ok', 'on');
+    else setStatus('The Spark didn\'t start a sync. Make sure it has a saved page, tap Sync pages, and press its button once when the app asks.', 'err', '');
+  } catch (e) {
+    setProgress(null);
+    log('sync failed: ' + (e.stack || e));
+    setStatus((got ? `Saved ${got} page${got === 1 ? '' : 's'}, then stopped: ` : '') + friendlyError(e), 'err', '');
+  }
+}
+
 async function sync(opts = {}) {
   const auto = !!opts.auto;
   if (S.busy || !S.dev) return; S.busy = true; renderChrome();
@@ -738,6 +844,7 @@ async function sync(opts = {}) {
       device = await pickDevice();
       if (device.id !== d.id) { log(`device id changed ${d.id} → ${device.id}; keeping pairing key`); d.id = device.id; saveDevice(); }
     }
+    if (d.proto === P.SPARK) { if (auto) return; await syncSpark(device); return; }
     L = new WacomLink(device);
     const isSpark = d.proto === P.SPARK;
     setStatus(auto ? 'Woke up, syncing…' : isSpark ? 'Now press the Spark\'s button once…' : 'Connecting…', '', isSpark && !auto ? 'blue' : 'amber');
@@ -1053,7 +1160,7 @@ $('settings').addEventListener('toggle', () => { if ($('settings').open) { $('lo
   } else {
     try { if (!(await navigator.bluetooth.getAvailability())) setStatus('Bluetooth looks switched off. Turn it on to pair or sync.', 'err'); } catch {}
   }
-  log(`Folio Sync started · ${navigator.userAgent}`);
+  log(`Folio Sync ${APP_VERSION} started · ${navigator.userAgent}`);
   await Store.open();
   try { await navigator.storage?.persist?.(); } catch {}
   if (!S.dev) { const saved = await Store.getMeta('device'); if (saved) { S.dev = saved; lsSet('folio.device', saved); log('restored pairing from backup'); } }
