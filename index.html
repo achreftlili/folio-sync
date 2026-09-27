@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#16181d">
 <meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Folio Sync</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -38,10 +41,13 @@ button{font:inherit;color:inherit}
 header.bar{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
   backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .bar .wrap{display:flex;align-items:center;gap:12px;min-height:58px}
-.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:-.01em}
+.brand{white-space:nowrap;flex:none;display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:-.01em}
 .brand .mark{width:26px;height:26px;border-radius:7px;background:var(--ink);position:relative;flex:none}
 .brand .mark::after{content:"";position:absolute;right:5px;top:5px;bottom:5px;width:9px;border-radius:2px;background:var(--bg)}
-.chip{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);
+.offline{margin-left:auto;font-size:12px;font-weight:600;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:3px 10px}
+.install{min-height:34px;padding:6px 12px;font-size:13px;margin-left:auto}
+.offline:not([hidden]) ~ .install,.offline:not([hidden]) ~ .chip,.install:not([hidden]) ~ .chip{margin-left:0}
+.chip{min-width:0;margin-left:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);
   border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 10px;background:var(--surface);max-width:60%;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .led{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
@@ -103,6 +109,7 @@ main{padding-block:20px 60px;display:grid;gap:20px}
 .toast{display:flex;align-items:center;gap:14px}
 .toast button{background:none;border:0;color:var(--accent-soft);font-weight:700;padding:4px 2px;cursor:pointer;text-transform:uppercase;letter-spacing:.04em;font-size:13px}
 @media (hover:none){.vnav{display:none}}
+@media (max-width:420px){.brand small{display:none}.chip{font-size:12px;padding:4px 10px 4px 8px}}
 .empty{border:1.5px dashed var(--line);border-radius:12px;padding:28px 18px;text-align:center;color:var(--muted);margin-top:14px}
 .selbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
 details.panel summary{cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between;align-items:center}
@@ -142,7 +149,9 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 </head>
 <body>
 <header class="bar"><div class="wrap">
-  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync <small style="font-weight:500;color:var(--muted);font-size:12px">v9</small></div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync <small style="font-weight:500;color:var(--muted);font-size:12px">v10</small></div>
+  <span class="offline" id="offline" hidden>Offline</span>
+  <button class="btn install" id="btnInstall" hidden>Install</button>
   <div class="chip" id="chip"><span class="led" id="chipLed"></span><span id="chipText">No Folio paired</span></div>
 </div></header>
 
@@ -169,7 +178,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 
   <!-- Sync -->
   <section class="panel" id="syncPanel" hidden>
-    <h2>Your Folio is paired</h2>
+    <h2 id="syncTitle">Your Folio is paired</h2>
     <p id="syncHint">No need to pair again. Save a page on the Folio with its button, then tap Sync. Pages are copied here and cleared from the Folio's memory.</p>
     <div class="actions">
       <button class="btn primary grow" id="btnSync">Sync pages</button>
@@ -264,7 +273,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
    ================================================================ */
 
 // ---------- small helpers ----------
-const APP_VERSION = 'v9 (page management)';
+const APP_VERSION = 'v10 (works offline)';
 const $ = id => document.getElementById(id);
 const hex = a => Array.from(a, b => b.toString(16).padStart(2, '0')).join(' ');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -606,6 +615,7 @@ function renderChrome() {
   const isSpark = !!(d && d.proto === P.SPARK);
   document.querySelector('label.toggle').hidden = isSpark;
   if (isSpark) $('autoNote').hidden = true;
+  if (d) $('syncTitle').textContent = `Your ${d.proto === P.SPARK ? 'Spark' : d.proto === P.INTUOS_PRO ? 'Intuos' : 'Folio'} is paired`;
   if (d) $('syncHint').textContent = d.proto === P.SPARK
     ? `No need to pair again. Save pages on the ${d.name || 'Spark'} with its button. To sync: tap Sync pages first, then press the Spark's button once.`
     : 'No need to pair again. Save a page on the Folio with its button, then tap Sync. Pages are copied here and cleared from the device\'s memory.';
@@ -1293,6 +1303,17 @@ $('btnCopyLog').onclick = async () => { const t = LOG.join('\n') || '(empty)'; t
 $('btnCopyKey').onclick = async () => { try { await navigator.clipboard.writeText(hex(S.dev.key).replace(/ /g, '')); toast('Device key copied'); } catch { toast('Couldn\'t copy'); } };
 $('btnForget').onclick = () => confirmSheet('Forget this Folio?', 'Your pages stay here. You\'ll need to pair again (hold the button 6 s) before the next sync.', 'Forget', async () => { stopWatching(); S.dev = null; S.battery = null; saveDevice(); renderChrome(); });
 $('settings').addEventListener('toggle', () => { if ($('settings').open) { $('log').textContent = LOG.slice(-400).join('\n') || 'Nothing yet.'; } });
+
+// ---------- offline + install ----------
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  navigator.serviceWorker.register('sw.js').then(r => log('offline support ready')).catch(e => log('offline support unavailable: ' + e.message));
+}
+function renderOnline() { $('offline').hidden = navigator.onLine; }
+window.addEventListener('online', renderOnline); window.addEventListener('offline', renderOnline); renderOnline();
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; $('btnInstall').hidden = false; });
+window.addEventListener('appinstalled', () => { $('btnInstall').hidden = true; toast('Installed. Open Folio Sync from your home screen.'); });
+$('btnInstall').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch {} installPrompt = null; $('btnInstall').hidden = true; };
 
 (async function init() {
   if (!navigator.bluetooth) {
