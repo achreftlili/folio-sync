@@ -702,7 +702,7 @@ function waitForAdvert(ms) {
 async function sync(opts = {}) {
   const auto = !!opts.auto;
   if (S.busy || !S.dev) return; S.busy = true; renderChrome();
-  const d = S.dev; let L; let got = 0;
+  const d = S.dev; let L; let got = 0; let sparkRefused = false;
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
   try {
     let device = await rememberedDevice();
@@ -724,7 +724,7 @@ async function sync(opts = {}) {
     setStatus('Connected, reading pages…', '', 'amber');
     await Proto.connectWithKey(L, d.key, d.proto);
     const spark = d.proto === P.SPARK;
-    if (spark) { try { await L.req(0xe3, [0], { timeout: 1500 }); } catch (e) { if (e instanceof GoneError) throw e; log('e3: ' + e.message); } }
+    if (spark) { try { await L.req(0xe3, [0], { timeout: 1500 }); } catch (e) { if (e instanceof GoneError) throw e; log('e3: ' + e.message); sparkRefused = true; } }
     else await trySetTime(L, d.proto);
     if (!spark) { try { S.battery = await Proto.battery(L); renderChrome(); } catch (e) { if (e instanceof GoneError) throw e; log('battery: ' + e.message); } }
     if (!spark) { try { Object.assign(d, await Proto.dims(L, d.proto)); saveDevice(); } catch (e) { if (e instanceof GoneError) throw e; log('dims: ' + e.message); } }
@@ -779,7 +779,10 @@ async function sync(opts = {}) {
   } catch (e) {
     log('sync failed: ' + (e.stack || e));
     setProgress(null);
-    setStatus((got ? `Saved ${got} page${got === 1 ? '' : 's'}, then stopped: ` : '') + friendlyError(e), 'err', '');
+    const msg = (sparkRefused && !got)
+      ? 'The Spark connected but says it has no saved pages, so it hung up. Draw on the paper with the Spark\'s pen, press the button once to save the page (the light blinks green), then tap Sync and press the button again.'
+      : friendlyError(e);
+    setStatus((got ? `Saved ${got} page${got === 1 ? '' : 's'}, then stopped: ` : '') + msg, 'err', '');
   } finally {
     try { wake && wake.release(); } catch {} L && L.disconnect();
     Auto.lastSync = Date.now(); S.busy = false; renderChrome(); await loadPages();
