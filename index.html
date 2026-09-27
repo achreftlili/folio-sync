@@ -412,12 +412,16 @@ class WacomLink {
     const nus = await this.server.getPrimaryService(UUID.NUS);
     this.tx = await nus.getCharacteristic(UUID.NUS_TX);
     const rx = await nus.getCharacteristic(UUID.NUS_RX);
-    rx.addEventListener('characteristicvaluechanged', e => this._onRx(new Uint8Array(e.target.value.buffer)));
+    if (rx.__folioH) rx.removeEventListener('characteristicvaluechanged', rx.__folioH);
+    rx.__folioH = e => { const cur = this.device.__folioLink || this; cur._onRx(new Uint8Array(e.target.value.buffer)); };
+    rx.addEventListener('characteristicvaluechanged', rx.__folioH);
     await rx.startNotifications();
     try {
       const off = await this.server.getPrimaryService(UUID.OFF);
       const pen = await off.getCharacteristic(UUID.OFF_PEN);
-      pen.addEventListener('characteristicvaluechanged', e => { const v = new Uint8Array(e.target.value.buffer); for (const b of v) this.pen.push(b); this.lastPen = Date.now(); });
+      if (pen.__folioH) pen.removeEventListener('characteristicvaluechanged', pen.__folioH);
+      pen.__folioH = e => { const cur = this.device.__folioLink || this; const v = new Uint8Array(e.target.value.buffer); for (const b of v) cur.pen.push(b); cur.lastPen = Date.now(); };
+      pen.addEventListener('characteristicvaluechanged', pen.__folioH);
       await pen.startNotifications();
     } catch (e) { log('offline pen-data service not found: ' + e.message); }
     try {
@@ -533,6 +537,23 @@ const Proto = {
     throw new Error('Unexpected reply ' + m.op.toString(16));
   },
 };
+
+// The Spark answers e3 with "general error" until its button has been pressed
+// for this connection; only then will it hand over pages. Keep asking while
+// the user presses the button.
+async function sparkHandshake(L, prompt, ms = 12000) {
+  const until = Date.now() + ms; let asked = false;
+  for (;;) {
+    L.msgs = [];
+    await L.send(0xe3, [0]);
+    const m = await L.next(1500);
+    if (m && m.op === 0xb3 && m.data[0] === 0) return true;
+    if (m) log('e3 reply ' + m.op.toString(16) + ' ' + hex(m.data));
+    if (Date.now() > until) return false;
+    if (!asked) { setStatus(prompt, '', 'blue'); asked = true; }
+    await sleep(600);
+  }
+}
 
 // ---------- app state ----------
 const S = {
@@ -702,7 +723,7 @@ function waitForAdvert(ms) {
 async function sync(opts = {}) {
   const auto = !!opts.auto;
   if (S.busy || !S.dev) return; S.busy = true; renderChrome();
-  const d = S.dev; let L; let got = 0; let sparkRefused = false; let sparkStopped = false;
+  const d = S.dev; let L; let got = 0; let sparkRefused = false; let sparkStopped = false; let totalPages = 0;
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
   try {
     let device = await rememberedDevice();
@@ -724,20 +745,26 @@ async function sync(opts = {}) {
     setStatus('Connected, reading pages…', '', 'amber');
     await Proto.connectWithKey(L, d.key, d.proto);
     const spark = d.proto === P.SPARK;
-    if (spark) { try { await L.req(0xe3, [0], { timeout: 1500 }); } catch (e) { if (e instanceof GoneError) throw e; log('e3: ' + e.message); sparkRefused = true; } }
-    else await trySetTime(L, d.proto);
+    if (spark && !(await sparkHandshake(L, 'Connected. Press the Spark\'s button once now…'))) sparkRefused = true;
+    if (spark && sparkRefused) throw new Error('SPARK_NOT_READY');
+    if (!spark) await trySetTime(L, d.proto);
     if (!spark) { try { S.battery = await Proto.battery(L); renderChrome(); } catch (e) { if (e instanceof GoneError) throw e; log('battery: ' + e.message); } }
     if (!spark) { try { Object.assign(d, await Proto.dims(L, d.proto)); saveDevice(); } catch (e) { if (e instanceof GoneError) throw e; log('dims: ' + e.message); } }
     if (d.proto !== P.SPARK) await L.req(0xec, [6, 0, 0, 0, 0, 0]);
     await L.req(0xb1, [1]); // paper mode
     const c = await L.req(0xc1, [0], { expect: [0xc2] });
     const total = d.proto === P.SPARK ? (c.data[0] << 8 | c.data[1]) : u16(c.data, 0);
-    log(`${total} page(s) on device`);
+    totalPages = total; log(`${total} page(s) on device`);
     if (!total) { setStatus(`Connected. No new pages on the ${d.name || 'Folio'}.`, 'ok', 'on'); return; }
     for (let n = 0; n < total; n++) {
       setStatus(`Downloading page ${n + 1} of ${total}…`, '', 'amber'); setProgress(n / total);
       // stroke info: size + timestamp
       let ts = Date.now();
+      if (d.proto === P.SPARK && n > 0) {
+        if (!(await sparkHandshake(L, `Page ${n} saved. Press the Spark's button once to get page ${n + 1} of ${total}…`))) { sparkStopped = true; break; }
+        setStatus(`Downloading page ${n + 1} of ${total}…`, '', 'amber');
+        try { await L.req(0xb1, [1], { timeout: 2000 }); } catch (e) { if (e instanceof GoneError) throw e; log('paper mode: ' + e.message); }
+      }
       if (d.proto === P.SPARK) {
         // Stroke info (size + time). The Spark sometimes refuses right after a
         // delete; switch it back into paper mode and try once more.
@@ -801,7 +828,8 @@ async function sync(opts = {}) {
         await sleep(300); // give the Spark a moment after the transfer before deleting
         L.msgs = [];
         await L.send(0xca, [0]);
-        const r = await L.next(1200);
+        let r = null;
+        try { r = await L.next(1200); } catch (e) { if (e instanceof GoneError && n === total - 1) { log('disconnected after the last page'); break; } throw e; }
         if (r) log(`delete reply ${r.op.toString(16)} ${hex(r.data)}`);
         if (r && r.op === 0xb3 && r.data[0] !== 0) log('the Spark refused to delete this page; it may come again next sync (duplicates are skipped)');
       } else await L.req(0xca, [0]);
@@ -813,8 +841,12 @@ async function sync(opts = {}) {
   } catch (e) {
     log('sync failed: ' + (e.stack || e));
     setProgress(null);
+    if (got && (e instanceof GoneError || /GATT Server is disconnected/.test(e.message || ''))) {
+      setStatus(got >= totalPages ? `Synced ${got} page${got === 1 ? '' : 's'}.` : `Synced ${got} page${got === 1 ? '' : 's'}. The device disconnected before the rest: tap Sync pages again to continue.`, 'ok', 'on');
+      return;
+    }
     const msg = (sparkRefused && !got)
-      ? 'The Spark connected but says it has no saved pages, so it hung up. Draw on the paper with the Spark\'s pen, press the button once to save the page (the light blinks green), then tap Sync and press the button again.'
+      ? 'The Spark connected but didn\'t get a button press in time, or has no saved pages. Tap Sync pages again and press the Spark\'s button once when the app asks.'
       : friendlyError(e);
     setStatus((got ? `Saved ${got} page${got === 1 ? '' : 's'}, then stopped: ` : '') + msg, 'err', '');
   } finally {
