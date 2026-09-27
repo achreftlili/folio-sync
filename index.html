@@ -702,7 +702,7 @@ function waitForAdvert(ms) {
 async function sync(opts = {}) {
   const auto = !!opts.auto;
   if (S.busy || !S.dev) return; S.busy = true; renderChrome();
-  const d = S.dev; let L; let got = 0; let sparkRefused = false;
+  const d = S.dev; let L; let got = 0; let sparkRefused = false; let sparkStopped = false;
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
   try {
     let device = await rememberedDevice();
@@ -739,14 +739,40 @@ async function sync(opts = {}) {
       // stroke info: size + timestamp
       let ts = Date.now();
       if (d.proto === P.SPARK) {
-        await L.send(0xc5, [0]);
-        for (let k = 0; k < 2; k++) { const m = await L.next(1500); if (!m) break; if (m.op === 0xcd) { ts = bcdTime(m.data); break; } }
+        // Stroke info (size + time). The Spark sometimes refuses right after a
+        // delete; switch it back into paper mode and try once more.
+        const info = async () => {
+          L.msgs = [];
+          await L.send(0xc5, [0]);
+          for (let k = 0; k < 3; k++) {
+            const m = await L.next(1500); if (!m) break;
+            if (m.op === 0xb3) { if (m.data[0] !== 0) throw new DeviceError(m.data[0]); continue; }
+            if (m.op === 0xcd) { ts = bcdTime(m.data); break; }
+          }
+        };
+        try { await info(); }
+        catch (e) {
+          if (!(e instanceof DeviceError)) throw e;
+          log('stroke info refused, re-entering paper mode');
+          await sleep(400);
+          try { await L.req(0xb1, [1], { timeout: 2000 }); } catch (e2) { if (e2 instanceof GoneError) throw e2; log('paper mode: ' + e2.message); }
+          try { await info(); } catch (e3) { if (e3 instanceof DeviceError && got) { sparkStopped = true; break; } throw e3; }
+        }
       } else {
         const m = await L.req(0xcc, [0], { expect: [0xcf] });
         ts = d.proto === P.INTUOS_PRO ? u32(m.data, 4) * 1000 : bcdTime(m.data.slice(4, 10));
       }
       L.pen = []; L.lastPen = Date.now();
-      const st = await L.req(0xc3, [0], { expect: [0xc8] });
+      let st;
+      try { st = await L.req(0xc3, [0], { expect: [0xc8] }); }
+      catch (e) {
+        if (!(e instanceof DeviceError) || d.proto !== P.SPARK) throw e;
+        log('download refused, re-entering paper mode');
+        await sleep(400);
+        try { await L.req(0xb1, [1], { timeout: 2000 }); } catch (e2) { if (e2 instanceof GoneError) throw e2; }
+        try { st = await L.req(0xc3, [0], { expect: [0xc8] }); }
+        catch (e3) { if (e3 instanceof DeviceError && got) { sparkStopped = true; break; } throw e3; }
+      }
       if (st.data[0] !== 0xbe) throw new Error('Unexpected download start ' + hex(st.data));
       let crc = null;
       while (crc == null) {
@@ -771,11 +797,19 @@ async function sync(opts = {}) {
       await Store.put(page);
       got++;
       if (!Store.ok) { log('storage unavailable: keeping pages on device'); break; }
-      if (d.proto === P.SPARK) await L.send(0xca, [0]); else await L.req(0xca, [0]);
+      if (d.proto === P.SPARK) {
+        await sleep(300); // give the Spark a moment after the transfer before deleting
+        L.msgs = [];
+        await L.send(0xca, [0]);
+        const r = await L.next(1200);
+        if (r) log(`delete reply ${r.op.toString(16)} ${hex(r.data)}`);
+        if (r && r.op === 0xb3 && r.data[0] !== 0) log('the Spark refused to delete this page; it may come again next sync (duplicates are skipped)');
+      } else await L.req(0xca, [0]);
       await loadPages();
     }
     setProgress(null);
-    setStatus(`Synced ${got} page${got === 1 ? '' : 's'}.`, 'ok', 'on');
+    if (sparkStopped) setStatus(`Synced ${got} page${got === 1 ? '' : 's'}. The Spark stopped there: tap Sync pages and press its button again to get the next ones.`, 'ok', 'on');
+    else setStatus(`Synced ${got} page${got === 1 ? '' : 's'}.`, 'ok', 'on');
   } catch (e) {
     log('sync failed: ' + (e.stack || e));
     setProgress(null);
