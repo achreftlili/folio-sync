@@ -388,7 +388,7 @@ class WacomLink {
     this.device = device; this.rx = []; this.msgs = []; this.waiter = null;
     this.pen = []; this.lastPen = 0; this.isSpark = false;
   }
-  async connect() {
+  async connect(retryFor = 0, onWait) {
     log(`connecting to ${this.device.name || this.device.id}`);
     this.gone = false;
     if (!this.device.__folioDisc && this.device.addEventListener) {
@@ -396,7 +396,19 @@ class WacomLink {
       this.device.__folioDisc = true;
     }
     this.device.__folioLink = this;
-    this.server = await this.device.gatt.connect();
+    // The Spark only accepts a connection if one is already being attempted
+    // when its button is pressed, so keep retrying for a while.
+    const deadline = Date.now() + retryFor; let tries = 0;
+    for (;;) {
+      try { this.server = await this.device.gatt.connect(); break; }
+      catch (e) {
+        tries++;
+        if (Date.now() > deadline) throw e;
+        log(`connect attempt ${tries} failed (${e.message}), retrying`);
+        onWait && onWait();
+        await sleep(300);
+      }
+    }
     const nus = await this.server.getPrimaryService(UUID.NUS);
     this.tx = await nus.getCharacteristic(UUID.NUS_TX);
     const rx = await nus.getCharacteristic(UUID.NUS_RX);
@@ -541,6 +553,9 @@ function setProgress(f) { $('progWrap').hidden = f == null; if (f != null) $('pr
 function renderChrome() {
   const d = S.dev;
   $('pairPanel').hidden = !!d; $('syncPanel').hidden = !d;
+  if (d) $('syncHint').textContent = d.proto === P.SPARK
+    ? `No need to pair again. Save pages on the ${d.name || 'Spark'} with its button. To sync: tap Sync pages first, then press the Spark's button once.`
+    : 'No need to pair again. Save a page on the Folio with its button, then tap Sync. Pages are copied here and cleared from the device\'s memory.';
   $('chipText').textContent = d ? `${d.name || 'Folio'}${S.battery ? ` · ${S.battery.pct}%${S.battery.charging ? ' charging' : ''}` : ''}` : 'No Folio paired';
   $('chipLed').className = 'led' + (d ? ' on' : '');
   const kv = $('devInfo'); kv.innerHTML = '';
@@ -576,6 +591,7 @@ function friendlyError(e) {
   }
   if (e.name === 'NotFoundError') return 'No device chosen. If your Folio wasn\'t in the list, check Bluetooth and Location are on and the light is on, then try again.';
   if (e.name === 'SecurityError') return 'This page isn\'t allowed to use Bluetooth. Open it directly in Chrome (not inside another app).';
+  if (e.name === 'NetworkError' && /Connection attempt failed|connect/i.test(e.message) && S.dev && S.dev.proto === P.SPARK) return 'Couldn\'t reach the Spark. It only connects when it has at least one saved page: draw, press the button to save, then tap Sync and press the button once more while the app is waiting.';
   if (e.name === 'NetworkError') return 'Lost the Bluetooth connection. Press the Folio\'s button and try again.';
   if (e instanceof DeviceError && e.code === 7) return 'The Folio doesn\'t recognise this app\'s key (it may have been paired with Inkspace or another phone). Open Settings & device and tap "Pair again".';
   if (e instanceof DeviceError && e.code === 2) return 'The Folio isn\'t ready. Press its button once and try again.';
@@ -691,7 +707,7 @@ async function sync(opts = {}) {
   try {
     let device = await rememberedDevice();
     if (device) {
-      if (!auto && Auto.watching) {
+      if (!auto && Auto.watching && d.proto !== P.SPARK) {
         setStatus('Press the Folio\'s button once to wake it…', '', 'amber');
         await waitForAdvert(20000);
       }
@@ -702,8 +718,10 @@ async function sync(opts = {}) {
       if (device.id !== d.id) { log(`device id changed ${d.id} → ${device.id}; keeping pairing key`); d.id = device.id; saveDevice(); }
     }
     L = new WacomLink(device);
-    setStatus(auto ? 'Folio woke up, syncing…' : 'Connecting…', '', 'amber');
-    await L.connect();
+    const isSpark = d.proto === P.SPARK;
+    setStatus(auto ? 'Woke up, syncing…' : isSpark ? 'Now press the Spark\'s button once…' : 'Connecting…', '', isSpark && !auto ? 'blue' : 'amber');
+    await L.connect(auto ? 5000 : 30000, () => setStatus(isSpark ? 'Waiting for the Spark: press its button once (it needs a saved page)…' : 'Waiting for the device: press its button once…', '', 'blue'));
+    setStatus('Connected, reading pages…', '', 'amber');
     await Proto.connectWithKey(L, d.key, d.proto);
     const spark = d.proto === P.SPARK;
     if (spark) { try { await L.req(0xe3, [0], { timeout: 1500 }); } catch (e) { if (e instanceof GoneError) throw e; log('e3: ' + e.message); } }
