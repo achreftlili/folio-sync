@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16181d">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Folio Sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f4f4f1; --surface:#ffffff; --ink:#16181d; --muted:#666c78; --line:#e2e3e7;
+  --accent:#2f4bd8; --accent-ink:#ffffff; --accent-soft:#e8ecfd;
+  --amber:#d9901f; --ok:#2e8b57; --danger:#c8413b; --paper:#ffffff; --stroke:#16181d;
+  --shadow:0 1px 2px rgba(22,24,29,.06),0 4px 16px rgba(22,24,29,.06);
+  --sans:"Instrument Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#101216; --surface:#191c22; --ink:#eceef2; --muted:#959baa; --line:#2a2e37;
+    --accent:#7d93ff; --accent-ink:#0e1020; --accent-soft:#232a4a; --shadow:none; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#101216; --surface:#191c22; --ink:#eceef2; --muted:#959baa; --line:#2a2e37;
+  --accent:#7d93ff; --accent-ink:#0e1020; --accent-soft:#232a4a; --shadow:none; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+  padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit}
+.wrap{max-width:980px;margin:0 auto;padding-inline:16px}
+header.bar{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.bar .wrap{display:flex;align-items:center;gap:12px;min-height:58px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:-.01em}
+.brand .mark{width:26px;height:26px;border-radius:7px;background:var(--ink);position:relative;flex:none}
+.brand .mark::after{content:"";position:absolute;right:5px;top:5px;bottom:5px;width:9px;border-radius:2px;background:var(--bg)}
+.chip{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);
+  border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 10px;background:var(--surface);max-width:60%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.led{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.led.on{background:var(--ok)} .led.blue{background:#3b7bff;animation:blink 1s steps(2,start) infinite}
+.led.amber{background:var(--amber)}
+@keyframes blink{to{visibility:hidden}}
+@media (prefers-reduced-motion:reduce){.led.blue{animation:none}}
+main{padding-block:20px 60px;display:grid;gap:20px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:var(--shadow)}
+.panel h2{margin:0 0 4px;font-size:18px;letter-spacing:-.01em;text-wrap:balance}
+.panel p{margin:0;color:var(--muted)}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);
+  background:var(--surface);border-radius:10px;padding:10px 16px;font-weight:600;cursor:pointer;min-height:44px}
+.btn:hover{border-color:var(--muted)}
+.btn:focus-visible,.tile:focus-visible,.icon:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger{color:var(--danger)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.grow{flex:1 1 180px}
+.steps{margin:14px 0 0;padding:0;list-style:none;display:grid;gap:10px;counter-reset:s}
+.steps li{display:grid;grid-template-columns:28px 1fr;gap:10px;align-items:start;counter-increment:s}
+.steps li::before{content:counter(s);width:24px;height:24px;border-radius:50%;background:var(--accent-soft);color:var(--accent);
+  font-weight:700;font-size:13px;display:grid;place-items:center;margin-top:1px}
+.status{margin-top:14px;display:flex;gap:10px;align-items:center;padding:12px 14px;border-radius:10px;
+  background:var(--accent-soft);font-weight:500}
+.status.err{background:color-mix(in srgb,var(--danger) 14%,var(--surface));color:var(--ink)}
+.status.ok{background:color-mix(in srgb,var(--ok) 14%,var(--surface))}
+.status .led{width:10px;height:10px}
+.progress{height:4px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:10px}
+.progress i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.row h2{margin:0}
+.count{color:var(--muted);font-size:14px;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:14px}
+.tile{position:relative;background:none;border:0;padding:0;text-align:left;cursor:pointer;display:grid;gap:6px}
+.tile canvas{width:100%;height:auto;background:var(--paper);border:1px solid var(--line);border-radius:6px;display:block}
+.tile .meta{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tile .tick{position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:50%;border:2px solid #fff;
+  background:rgba(0,0,0,.25);display:none}
+.selecting .tile .tick{display:block}
+.tile.sel .tick{background:var(--accent);border-color:var(--accent)}
+.tile.sel .tick::after{content:"";position:absolute;left:7px;top:3px;width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.tile.sel canvas{outline:3px solid var(--accent);outline-offset:-1px}
+.empty{border:1.5px dashed var(--line);border-radius:12px;padding:28px 18px;text-align:center;color:var(--muted);margin-top:14px}
+.selbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+details.panel summary{cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between;align-items:center}
+details.panel summary::-webkit-details-marker{display:none}
+details.panel summary::after{content:"+";color:var(--muted);font-size:20px;line-height:1}
+details[open].panel summary::after{content:"–"}
+.set{display:grid;gap:14px;margin-top:14px}
+.set label{display:grid;gap:6px;font-weight:500}
+.set .hint{font-size:13px;color:var(--muted);font-weight:400}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:14px}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--mono);font-size:13px;overflow-wrap:anywhere}
+pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;
+  max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:0}
+.warn{border-color:color-mix(in srgb,var(--amber) 50%,var(--line));background:color-mix(in srgb,var(--amber) 9%,var(--surface))}
+/* viewer */
+.viewer{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+.vtop{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.vtop .title{font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.icon{width:44px;height:44px;border-radius:10px;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;cursor:pointer;flex:none}
+.icon svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.vbody{flex:1;min-height:0;display:grid;place-items:center;padding:16px;overflow:auto}
+.vbody canvas{max-width:100%;max-height:100%;background:var(--paper);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow)}
+.vbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px;border-top:1px solid var(--line);justify-content:center}
+.vbar .btn{flex:1 1 90px;max-width:180px}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:30;
+  background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:500;max-width:calc(100% - 32px)}
+.sheet{position:fixed;inset:0;z-index:25;background:rgba(0,0,0,.4);display:grid;align-items:end}
+.sheet .card{background:var(--surface);border-radius:16px 16px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));display:grid;gap:10px;max-width:560px;width:100%;margin:0 auto}
+.sheet .card h3{margin:0 0 4px}
+</style>
+</head>
+<body>
+<header class="bar"><div class="wrap">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync</div>
+  <div class="chip" id="chip"><span class="led" id="chipLed"></span><span id="chipText">No Folio paired</span></div>
+</div></header>
+
+<div class="wrap"><main>
+
+  <section class="panel warn" id="noBt" hidden>
+    <h2>Bluetooth isn't available in this browser</h2>
+    <p id="noBtMsg">Open this page in Chrome on Android (or Chrome/Edge on a computer). Firefox, Samsung Internet and iPhone browsers can't talk to Bluetooth devices from a web page.</p>
+  </section>
+
+  <!-- Pair -->
+  <section class="panel" id="pairPanel">
+    <h2>Pair your Bamboo Folio</h2>
+    <p>Do this once. It gives the Folio a private key so only this app can read it.</p>
+    <ol class="steps">
+      <li><span>Turn on Bluetooth and Location on your phone.</span></li>
+      <li><span>Hold the Folio's round button for about 6 seconds, until the light <span style="white-space:nowrap"><b>blinks blue</b> <span class="led blue" style="display:inline-block;vertical-align:middle"></span></span>.</span></li>
+      <li><span>Tap <b>Pair Folio</b> and pick your Folio from the list. When asked, press the button once more.</span></li>
+    </ol>
+    <div class="actions">
+      <button class="btn primary grow" id="btnPair">Pair Folio</button>
+    </div>
+  </section>
+
+  <!-- Sync -->
+  <section class="panel" id="syncPanel" hidden>
+    <h2>Sync your pages</h2>
+    <p>Press the Folio's button once to wake it, then tap Sync. Pages are copied here and cleared from the Folio's memory.</p>
+    <div class="actions">
+      <button class="btn primary grow" id="btnSync">Sync pages</button>
+      <button class="btn" id="btnRepair">Pair again</button>
+    </div>
+  </section>
+
+  <div id="statusBox" hidden>
+    <div class="status" id="status"><span class="led" id="statusLed"></span><span id="statusText"></span></div>
+    <div class="progress" id="progWrap" hidden><i id="prog"></i></div>
+  </div>
+
+  <!-- Pages -->
+  <section class="panel" id="pagesPanel">
+    <div class="row">
+      <h2>Pages</h2>
+      <span class="count" id="count">0 pages</span>
+    </div>
+    <div class="selbar" id="pageTools">
+      <button class="btn" id="btnSelect">Select</button>
+      <button class="btn" id="btnPdfAll">Export all as PDF</button>
+    </div>
+    <div class="selbar" id="selTools" hidden>
+      <span class="count" id="selCount">0 selected</span>
+      <button class="btn" id="btnSelAll">Select all</button>
+      <button class="btn" id="btnSelPdf">PDF</button>
+      <button class="btn danger" id="btnSelDel">Delete</button>
+      <button class="btn" id="btnSelDone">Done</button>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty">No pages yet. Draw on the Folio, press its button to save the page, then tap <b>Sync pages</b>.</div>
+  </section>
+
+  <!-- Settings -->
+  <details class="panel" id="settings">
+    <summary>Settings &amp; device</summary>
+    <div class="set">
+      <label for="thick">Ink thickness <span class="hint">How bold strokes look on screen and in exports.</span>
+        <input type="range" id="thick" min="0.2" max="1.6" step="0.05" value="0.6"></label>
+      <dl class="kv" id="devInfo"></dl>
+      <div class="actions" style="margin-top:0">
+        <button class="btn" id="btnCopyKey">Copy device key</button>
+        <button class="btn danger" id="btnForget">Forget this Folio</button>
+      </div>
+      <label>Connection log <span class="hint">If something fails, copy this and send it to whoever helps you debug.</span></label>
+      <pre class="log" id="log"></pre>
+      <div class="actions" style="margin-top:0">
+        <button class="btn" id="btnCopyLog">Copy log</button>
+        <button class="btn" id="btnAllDevices">Pair (show all Bluetooth devices)</button>
+      </div>
+    </div>
+  </details>
+</main></div>
+
+<!-- Viewer -->
+<div class="viewer" id="viewer" hidden>
+  <div class="vtop">
+    <button class="icon" id="vBack" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <div class="title" id="vTitle"></div>
+    <button class="icon" id="vRot" aria-label="Rotate"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg></button>
+    <button class="icon" id="vDel" aria-label="Delete page"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>
+  </div>
+  <div class="vbody"><canvas id="vCanvas"></canvas></div>
+  <div class="vbar">
+    <button class="btn" data-exp="png">PNG</button>
+    <button class="btn" data-exp="svg">SVG</button>
+    <button class="btn" data-exp="pdf">PDF</button>
+  </div>
+</div>
+
+<!-- Confirm / export sheet -->
+<div class="sheet" id="sheet" hidden><div class="card" id="sheetCard"></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+'use strict';
+/* ================================================================
+   Folio Sync — talks to Wacom Bamboo Folio / Slate / Spark over Web Bluetooth.
+   Protocol and stroke format ported from the Tuhi project (GPLv2+),
+   https://github.com/tuhiproject/tuhi
+   ================================================================ */
+
+// ---------- small helpers ----------
+const $ = id => document.getElementById(id);
+const hex = a => Array.from(a, b => b.toString(16).padStart(2, '0')).join(' ');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const LOG = [];
+function log(msg) {
+  const t = new Date().toISOString().slice(11, 23);
+  LOG.push(`${t} ${msg}`); if (LOG.length > 1500) LOG.splice(0, LOG.length - 1500);
+  const el = $('log'); if (el && $('settings').open) { el.textContent = LOG.slice(-400).join('\n'); el.scrollTop = el.scrollHeight; }
+}
+function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+let toastT;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2800); }
+
+// ---------- CRC32 ----------
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(d) { let c = 0xFFFFFFFF; for (let i = 0; i < d.length; i++) c = CRC_T[(c ^ d[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+// ---------- stroke-file decoder (verified against Tuhi's parser) ----------
+function popcount(n){let c=0;while(n){c+=n&1;n>>=1;}return c;}
+function eq(d,i,arr){if(i+arr.length>d.length)return false;for(let k=0;k<arr.length;k++)if(d[i+k]!==arr[k])return false;return true;}
+const HDR_PRO=[0x67,0x82,0x69,0x65], HDR_SPARK=[0x62,0x38,0x62,0x74];
+function identify(d,i){
+  const h=d[i], n=popcount(h), ps=i+1, pl=Math.min(n,d.length-ps);
+  if(eq(d,i,HDR_PRO)||eq(d,i,HDR_SPARK))return 'FILE';
+  if(eq(d,i,[0xfc,0xff,0xff,0xff,0xff,0xff,0xff]))return 'SEND';
+  if(pl===8&&eq(d,ps,[0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]))return 'EOF';
+  if((h&3)===0)return 'DELTA';
+  if(pl<=0)return 'UNKNOWN';
+  if(d[ps]===0xfa||eq(d,ps,[0xff,0xee,0xee]))return 'SHDR';
+  if(eq(d,ps,[0xff,0xff]))return 'POINT';
+  if(eq(d,ps,[0xdd,0xdd]))return 'LOST';
+  return 'UNKNOWN';
+}
+function parseDelta(h,d,o){
+  const r={x:null,y:null,p:null,dx:null,dy:null,dp:null};let off=o;
+  for(const [k,sh] of [['x',2],['y',4],['p',6]]){
+    const m=(h>>sh)&3;
+    if(m===1)throw new Error('bad delta mask');
+    if(m===2){let v=d[off];if(v>127)v-=256;r['d'+k]=v;off+=1;}
+    else if(m===3){r[k]=d[off]|(d[off+1]<<8);off+=2;}
+  }
+  return {pkt:r,len:off-o};
+}
+function parseStrokeFile(d,start){
+  let i;
+  if(eq(d,start,HDR_PRO))i=start+16; else if(eq(d,start,HDR_SPARK))i=start+4;
+  else throw new Error('Unknown file format '+hex(d.slice(start,start+4)));
+  const strokes=[];let pts=[];
+  let last={x:0,y:0,p:0},ld={x:0,y:0,p:0};
+  const flush=()=>{if(pts.length){strokes.push(pts);pts=[];}};
+  while(i<d.length){
+    const t=identify(d,i), h=d[i], n=popcount(h);
+    if(t==='FILE'){break;}
+    else if(t==='SEND'){flush();i+=n+1;}
+    else if(t==='EOF'){flush();i+=n+1;break;}
+    else if(t==='SHDR'){
+      ld={x:0,y:0,p:0};flush();let sz=n+1;
+      if(d[i+1]===0xfa&&(d[i+2]&0x80)){const ph=d[i+sz];sz+=1+popcount(ph);}
+      i+=sz;
+    }
+    else if(t==='LOST'||t==='UNKNOWN'){i+=n+1;}
+    else {
+      let res,sz;
+      if(t==='POINT'){res=parseDelta(h&~3,d,i+3);sz=1+2+res.len;}
+      else{res=parseDelta(h,d,i+1);sz=1+res.len;}
+      const k=res.pkt;let {x,y,p}=last;let dx=ld.x,dy=ld.y,dp=ld.p;
+      if(k.dx!==null)dx+=k.dx;else if(k.x!==null){x=k.x;dx=0;}
+      if(k.dy!==null)dy+=k.dy;else if(k.y!==null){y=k.y;dy=0;}
+      if(k.dp!==null)dp+=k.dp;else if(k.p!==null){p=k.p;dp=0;}
+      ld={x:dx,y:dy,p:dp};last={x:x+dx,y:y+dy,p:p+dp};
+      pts.push([last.x,last.y,last.p]);i+=sz;
+    }
+  }
+  flush();
+  return {strokes,next:i};
+}
+function parsePenData(d){
+  let i=0;const all=[];
+  while(i<d.length){
+    if(!(eq(d,i,HDR_PRO)||eq(d,i,HDR_SPARK)))break;
+    const r=parseStrokeFile(d,i);all.push(...r.strokes);
+    if(r.next<=i)break;i=r.next;
+  }
+  return all;
+}
+
+// ---------- page storage (IndexedDB, memory fallback) ----------
+const Store = {
+  db: null, mem: new Map(), ok: false,
+  async open() {
+    try {
+      this.db = await new Promise((res, rej) => {
+        const r = indexedDB.open('folio-sync', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('pages', { keyPath: 'id' });
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      });
+      this.ok = true;
+    } catch (e) { log('IndexedDB unavailable: ' + e); this.ok = false; }
+  },
+  tx(mode, fn) {
+    return new Promise((res, rej) => {
+      const t = this.db.transaction('pages', mode); const s = t.objectStore('pages'); let out;
+      Promise.resolve(fn(s)).then(v => out = v);
+      t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
+  },
+  async all() {
+    if (!this.ok) return [...this.mem.values()];
+    return this.tx('readonly', s => new Promise(r => { const q = s.getAll(); q.onsuccess = () => r(q.result); }));
+  },
+  async put(p) { if (!this.ok) { this.mem.set(p.id, p); return; } await this.tx('readwrite', s => { s.put(p); }); },
+  async del(id) { if (!this.ok) { this.mem.delete(id); return; } await this.tx('readwrite', s => { s.delete(id); }); },
+};
+
+// ---------- Wacom BLE protocol ----------
+const UUID = {
+  NUS: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', NUS_TX: '6e400002-b5a3-f393-e0a9-e50e24dcca9e', NUS_RX: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+  OFF: 'ffee0001-bbaa-9988-7766-554433221100', OFF_PEN: 'ffee0003-bbaa-9988-7766-554433221100',
+  SYS: '3a340720-c572-11e5-86c5-0002a5d5c51b', SYS_CHR: '3a340721-c572-11e5-86c5-0002a5d5c51b',
+  LIVE: '00001523-1212-efde-1523-785feabcd123',
+};
+const WACOM_IDS = [0x4755, 0x4157, 0x424d];
+const P = { SPARK: 1, SLATE: 2, INTUOS_PRO: 3 };
+const PNAME = { 1: 'Spark', 2: 'Slate/Folio', 3: 'Intuos Pro Paper' };
+const ERR = { 1: 'general error', 2: 'the Folio is not ready', 3: 'read-only setting', 4: 'command not supported', 7: 'wrong device key' };
+
+class DeviceError extends Error { constructor(code) { super(`Device replied: ${ERR[code] || 'error ' + code}`); this.code = code; } }
+
+class WacomLink {
+  constructor(device) {
+    this.device = device; this.rx = []; this.msgs = []; this.waiter = null;
+    this.pen = []; this.lastPen = 0; this.isSpark = false;
+  }
+  async connect() {
+    log(`connecting to ${this.device.name || this.device.id}`);
+    this.server = await this.device.gatt.connect();
+    const nus = await this.server.getPrimaryService(UUID.NUS);
+    this.tx = await nus.getCharacteristic(UUID.NUS_TX);
+    const rx = await nus.getCharacteristic(UUID.NUS_RX);
+    rx.addEventListener('characteristicvaluechanged', e => this._onRx(new Uint8Array(e.target.value.buffer)));
+    await rx.startNotifications();
+    try {
+      const off = await this.server.getPrimaryService(UUID.OFF);
+      const pen = await off.getCharacteristic(UUID.OFF_PEN);
+      pen.addEventListener('characteristicvaluechanged', e => { const v = new Uint8Array(e.target.value.buffer); for (const b of v) this.pen.push(b); this.lastPen = Date.now(); });
+      await pen.startNotifications();
+    } catch (e) { log('offline pen-data service not found: ' + e.message); }
+    try {
+      const sys = await this.server.getPrimaryService(UUID.SYS);
+      const c = await sys.getCharacteristic(UUID.SYS_CHR);
+      c.addEventListener('characteristicvaluechanged', e => log('SYSEVENT ' + hex(new Uint8Array(e.target.value.buffer))));
+      await c.startNotifications();
+    } catch (e) { this.isSpark = true; log('no sysevent service → Spark-style device'); }
+    log('connected');
+  }
+  disconnect() { try { this.device.gatt.connected && this.device.gatt.disconnect(); } catch {} }
+  _onRx(v) {
+    log('RX ' + hex(v));
+    for (const b of v) this.rx.push(b);
+    while (this.rx.length >= 2 && this.rx.length >= this.rx[1] + 2) {
+      const len = this.rx[1];
+      this.msgs.push({ op: this.rx[0], data: this.rx.slice(2, 2 + len) });
+      this.rx = this.rx.slice(2 + len);
+    }
+    if (this.msgs.length && this.waiter) { const w = this.waiter; this.waiter = null; w(); }
+  }
+  async next(timeout = 5000) {
+    if (!this.msgs.length) {
+      await new Promise(res => { const t = setTimeout(() => { this.waiter = null; res(); }, timeout); this.waiter = () => { clearTimeout(t); res(); }; });
+    }
+    return this.msgs.shift() || null;
+  }
+  async send(op, args = [0]) {
+    const buf = new Uint8Array([op, args.length, ...args]);
+    log('TX ' + hex(buf));
+    if (this.tx.writeValueWithResponse) {
+      try { await this.tx.writeValueWithResponse(buf); return; } catch (e) { log('write-with-response failed, retrying without: ' + e.message); }
+      await this.tx.writeValueWithoutResponse(buf);
+    } else await this.tx.writeValue(buf);
+  }
+  async req(op, args = [0], { timeout = 5000, expect } = {}) {
+    await this.send(op, args);
+    const m = await this.next(timeout);
+    if (!m) throw new Error(`No reply to command ${op.toString(16)}`);
+    if (m.op === 0xb3) { if (m.data[0] !== 0) throw new DeviceError(m.data[0]); return m; }
+    if (expect && !expect.includes(m.op)) throw new Error(`Unexpected reply ${m.op.toString(16)} to ${op.toString(16)}`);
+    return m;
+  }
+}
+
+const u16 = (d, i) => d[i] | (d[i + 1] << 8);
+const u32 = (d, i) => (d[i] | (d[i + 1] << 8) | (d[i + 2] << 16) | (d[i + 3] << 24)) >>> 0;
+function bcdTime(d) { // yy mm dd HH MM SS as hex digits, UTC
+  const s = hex(d).replace(/ /g, '');
+  const n = i => parseInt(s.substr(i, 2), 10);
+  const t = Date.UTC(2000 + n(0), n(2) - 1, n(4), n(6), n(8), n(10));
+  return isNaN(t) ? Date.now() : t;
+}
+function nowBcd() {
+  const d = new Date(); const f = v => String(v).padStart(2, '0');
+  const s = f(d.getUTCFullYear() % 100) + f(d.getUTCMonth() + 1) + f(d.getUTCDate()) + f(d.getUTCHours()) + f(d.getUTCMinutes()) + f(d.getUTCSeconds());
+  return s.match(/../g).map(x => parseInt(x, 16));
+}
+function newKey() { const b = new Uint8Array(6); crypto.getRandomValues(b); return Array.from(b); }
+
+const Proto = {
+  async setTime(L, proto) {
+    if (proto === P.INTUOS_PRO) { const t = Math.floor(Date.now() / 1000); await L.req(0xb6, [t & 255, (t >> 8) & 255, (t >> 16) & 255, (t >>> 24) & 255, 0, 0]); }
+    else await L.req(0xb6, nowBcd());
+  },
+  async battery(L) { const m = await L.req(0xb9, [0], { expect: [0xba] }); return { pct: m.data[0], charging: m.data[1] === 1 }; },
+  async name(L, proto) {
+    if (proto === P.INTUOS_PRO) { const m = await L.req(0xdb, [0], { expect: [0xbc] }); return new TextDecoder().decode(new Uint8Array(m.data)); }
+    let m = await L.req(0xbb, [0], { expect: [0xbc] }); let bytes = [...m.data];
+    while (bytes.length && bytes[bytes.length - 1] !== 0x0a) { const n = await L.next(1500); if (!n || n.op !== 0xbc) break; bytes.push(...n.data); }
+    return new TextDecoder().decode(new Uint8Array(bytes)).trim();
+  },
+  async dims(L, proto) {
+    if (proto === P.SPARK) return { w: 21000, h: 14800, ps: 10 };
+    const w = await L.req(0xea, [3, 0], { expect: [0xeb] });
+    const h = await L.req(0xea, [4, 0], { expect: [0xeb] });
+    let ps = 10;
+    if (proto === P.INTUOS_PRO) { try { const p = await L.req(0xea, [0x14, 0], { expect: [0xeb] }); ps = u32(p.data, 2) - 1; } catch { ps = 5; } }
+    return { w: u32(w.data, 2), h: u32(h.data, 2), ps };
+  },
+  async firmware(L) {
+    try {
+      const a = await L.req(0xb7, [0], { expect: [0xb8] }); const b = await L.req(0xb7, [1], { expect: [0xb8] });
+      const f = d => d.slice(1).map(x => x.toString(16)).join('');
+      return f(a.data) + '-' + f(b.data);
+    } catch (e) { log('firmware query failed: ' + e.message); return ''; }
+  },
+  async connectWithKey(L, key, proto) {
+    await L.send(0xe6, key);
+    const m = await L.next(5000);
+    if (!m) throw new Error('The Folio did not answer. Press its button once and try again.');
+    if (m.op === 0x50) return;
+    if (m.op === 0x51) { const r = m.data[6]; if (r === 1 || r === 2) throw new DeviceError(7); throw new DeviceError(2); }
+    if (m.op === 0xb3) {
+      if (m.data[0] === 0) return;
+      if (m.data[0] === 7 || (proto === P.SPARK && m.data[0] === 1)) throw new DeviceError(7);
+      throw new DeviceError(m.data[0]);
+    }
+    throw new Error('Unexpected reply ' + m.op.toString(16));
+  },
+};
+
+// ---------- app state ----------
+const S = {
+  dev: lsGet('folio.device', null), // {id, key:[..6], proto, name, w, h, ps, fw}
+  pages: [], selecting: false, sel: new Set(), busy: false,
+  thick: lsGet('folio.thick', 0.6), defRot: lsGet('folio.rot', 90),
+  battery: null, viewing: null,
+};
+
+function setStatus(text, kind = '', led = '') {
+  $('statusBox').hidden = !text; $('statusText').textContent = text || '';
+  $('status').className = 'status' + (kind ? ' ' + kind : '');
+  $('statusLed').className = 'led' + (led ? ' ' + led : '');
+}
+function setProgress(f) { $('progWrap').hidden = f == null; if (f != null) $('prog').style.width = Math.round(f * 100) + '%'; }
+
+function renderChrome() {
+  const d = S.dev;
+  $('pairPanel').hidden = !!d; $('syncPanel').hidden = !d;
+  $('chipText').textContent = d ? `${d.name || 'Folio'}${S.battery ? ` · ${S.battery.pct}%${S.battery.charging ? ' charging' : ''}` : ''}` : 'No Folio paired';
+  $('chipLed').className = 'led' + (d ? ' on' : '');
+  const kv = $('devInfo'); kv.innerHTML = '';
+  const add = (k, v) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; kv.append(dt, dd); };
+  if (d) {
+    add('Device', d.name || '—'); add('Protocol', PNAME[d.proto] || d.proto);
+    add('Pad size', `${(d.w * d.ps / 1000).toFixed(0)} × ${(d.h * d.ps / 1000).toFixed(0)} mm`);
+    if (d.fw) add('Firmware', d.fw);
+    add('Device key', hex(d.key).replace(/ /g, ''));
+  } else add('Device', 'Not paired');
+  $('btnCopyKey').disabled = !d; $('btnForget').disabled = !d;
+  $('btnPair').disabled = $('btnSync').disabled = $('btnRepair').disabled = S.busy || !navigator.bluetooth;
+}
+
+// ---------- Bluetooth flows ----------
+async function pickDevice(all = false) {
+  const optionalServices = [UUID.NUS, UUID.OFF, UUID.SYS, UUID.LIVE];
+  if (all) return navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices });
+  const filters = [{ namePrefix: 'Bamboo' }, { namePrefix: 'Intuos' }, { services: [UUID.NUS] },
+    ...WACOM_IDS.map(id => ({ manufacturerData: [{ companyIdentifier: id }] }))];
+  try { return await navigator.bluetooth.requestDevice({ filters, optionalServices }); }
+  catch (e) {
+    if (e.name === 'TypeError') { log('manufacturer filter unsupported, retrying with name filters'); return navigator.bluetooth.requestDevice({ filters: filters.slice(0, 3), optionalServices }); }
+    throw e;
+  }
+}
+
+function friendlyError(e) {
+  if (e.name === 'NotFoundError') return 'No device chosen. If your Folio wasn\'t in the list, check Bluetooth and Location are on and the light is on, then try again.';
+  if (e.name === 'SecurityError') return 'This page isn\'t allowed to use Bluetooth. Open it directly in Chrome (not inside another app).';
+  if (e.name === 'NetworkError') return 'Lost the Bluetooth connection. Press the Folio\'s button and try again.';
+  if (e instanceof DeviceError && e.code === 7) return 'The Folio doesn\'t recognise this app\'s key (it may have been paired with Inkspace or another phone). Tap "Pair again".';
+  if (e instanceof DeviceError && e.code === 2) return 'The Folio isn\'t ready. Press its button once and try again.';
+  return e.message || String(e);
+}
+
+async function pair(all = false) {
+  if (S.busy) return; S.busy = true; renderChrome();
+  let L;
+  try {
+    setStatus('Choose your Folio in the list…', '', 'blue');
+    const device = await pickDevice(all);
+    L = new WacomLink(device);
+    setStatus('Connecting…', '', 'amber');
+    await L.connect();
+    const key = newKey();
+    let proto;
+    if (L.isSpark) {
+      try { await Proto.connectWithKey(L, key, P.SPARK); } catch (e) { log('expected during Spark pairing: ' + e.message); }
+      await L.send(0xe3, [1]);
+    } else {
+      await L.send(0xe7, key);
+    }
+    setStatus('Press the Folio\'s button now', '', 'blue');
+    const m = await L.next(30000);
+    if (!m) throw new Error('No button press detected. Hold the button until the light blinks blue, then try again.');
+    if (m.op === 0xe4) proto = L.isSpark ? P.SPARK : P.SLATE;
+    else if (m.op === 0x53) proto = P.INTUOS_PRO;
+    else if (m.op === 0xb3 && m.data[0] !== 0) throw new DeviceError(m.data[0]);
+    else throw new Error('Unexpected reply during pairing: ' + m.op.toString(16));
+    log('button confirmed, protocol ' + PNAME[proto]);
+    setStatus('Finishing setup…', '', 'amber');
+    if (proto === P.SPARK) { try { await L.req(0xe5, [0]); } catch (e) { log('register-complete: ' + e.message); } }
+    await Proto.setTime(L, proto);
+    if (proto !== P.SPARK) { try { await L.req(0xec, [6, 0, 0, 0, 0, 0]); } catch (e) { log('transfer type: ' + e.message); } }
+    let name = device.name || 'Folio';
+    try { name = (await Proto.name(L, proto)) || name; } catch (e) { log('name: ' + e.message); }
+    const dm = await Proto.dims(L, proto);
+    const fw = await Proto.firmware(L);
+    try { S.battery = await Proto.battery(L); } catch (e) { log('battery: ' + e.message); }
+    S.dev = { id: device.id, key, proto, name, ...dm, fw };
+    lsSet('folio.device', S.dev);
+    log('paired: ' + JSON.stringify(S.dev));
+    setStatus(`Paired with ${name}. Draw a page, press the button to save it, then tap Sync pages.`, 'ok', 'on');
+  } catch (e) {
+    log('pair failed: ' + (e.stack || e));
+    setStatus(friendlyError(e), 'err', '');
+  } finally { L && L.disconnect(); S.busy = false; renderChrome(); }
+}
+
+async function sync() {
+  if (S.busy || !S.dev) return; S.busy = true; renderChrome();
+  const d = S.dev; let L; let got = 0;
+  let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
+  try {
+    setStatus('Choose your Folio in the list…', '', 'amber');
+    const device = await pickDevice();
+    if (device.id !== d.id) log(`note: chosen device id ${device.id} differs from paired id ${d.id}; trying stored key anyway`);
+    L = new WacomLink(device);
+    setStatus('Connecting…', '', 'amber');
+    await L.connect();
+    await Proto.connectWithKey(L, d.key, d.proto);
+    if (d.proto === P.SPARK) { try { await L.req(0xe3, [0]); } catch (e) { log('e3: ' + e.message); } }
+    await Proto.setTime(L, d.proto);
+    try { S.battery = await Proto.battery(L); renderChrome(); } catch (e) { log('battery: ' + e.message); }
+    try { Object.assign(d, await Proto.dims(L, d.proto)); lsSet('folio.device', d); } catch (e) { log('dims: ' + e.message); }
+    if (d.proto !== P.SPARK) await L.req(0xec, [6, 0, 0, 0, 0, 0]);
+    await L.req(0xb1, [1]); // paper mode
+    const c = await L.req(0xc1, [0], { expect: [0xc2] });
+    const total = d.proto === P.SPARK ? (c.data[0] << 8 | c.data[1]) : u16(c.data, 0);
+    log(`${total} page(s) on device`);
+    if (!total) { setStatus('Connected. No new pages on the Folio.', 'ok', 'on'); return; }
+    for (let n = 0; n < total; n++) {
+      setStatus(`Downloading page ${n + 1} of ${total}…`, '', 'amber'); setProgress(n / total);
+      // stroke info: size + timestamp
+      let ts = Date.now();
+      if (d.proto === P.SPARK) {
+        await L.send(0xc5, [0]);
+        for (let k = 0; k < 2; k++) { const m = await L.next(3000); if (!m) break; if (m.op === 0xcd) { ts = bcdTime(m.data); break; } }
+      } else {
+        const m = await L.req(0xcc, [0], { expect: [0xcf] });
+        ts = d.proto === P.INTUOS_PRO ? u32(m.data, 4) * 1000 : bcdTime(m.data.slice(4, 10));
+      }
+      L.pen = []; L.lastPen = Date.now();
+      const st = await L.req(0xc3, [0], { expect: [0xc8] });
+      if (st.data[0] !== 0xbe) throw new Error('Unexpected download start ' + hex(st.data));
+      let crc = null;
+      while (crc == null) {
+        const m = await L.next(5000);
+        if (!m) { if (Date.now() - L.lastPen > 5000) throw new Error('Page download stalled'); continue; }
+        if (m.op === 0xc8 && m.data[0] === 0xed) {
+          if (d.proto === P.SPARK) { const m2 = await L.next(5000); if (m2 && m2.op === 0xc9) crc = parseInt(hex(m2.data).replace(/ /g, ''), 16) >>> 0; else throw new Error('Missing checksum'); }
+          else crc = u32(m.data, 1);
+        } else log('ignored message ' + m.op.toString(16));
+      }
+      let data = L.pen;
+      if (crc32(data) !== crc) { await sleep(800); data = L.pen; }
+      if (crc32(data) !== crc) throw new Error(`Checksum mismatch on page ${n + 1} (${data.length} bytes). Nothing was deleted; try again.`);
+      log(`page ${n + 1}: ${data.length} bytes, crc ok`);
+      const strokes = parsePenData(data);
+      const page = {
+        id: `${ts}-${crc.toString(16)}`, created: ts, synced: Date.now(),
+        w: d.w, h: d.h, ps: d.ps, pmax: d.proto === P.INTUOS_PRO ? 8192 : d.proto === P.SLATE ? 2047 : 1023,
+        rot: d.proto === P.INTUOS_PRO ? 0 : S.defRot,
+        strokes: strokes.map(s => s.flat()), raw: Array.from(data),
+      };
+      await Store.put(page);
+      got++;
+      if (!Store.ok) { log('storage unavailable: keeping pages on device'); break; }
+      if (d.proto === P.SPARK) await L.send(0xca, [0]); else await L.req(0xca, [0]);
+      await loadPages();
+    }
+    setProgress(null);
+    setStatus(`Synced ${got} page${got === 1 ? '' : 's'}.`, 'ok', 'on');
+  } catch (e) {
+    log('sync failed: ' + (e.stack || e));
+    setProgress(null);
+    setStatus((got ? `Saved ${got} page${got === 1 ? '' : 's'}, then stopped: ` : '') + friendlyError(e), 'err', '');
+  } finally { try { wake && wake.release(); } catch {} L && L.disconnect(); S.busy = false; renderChrome(); await loadPages(); }
+}
+
+// ---------- drawing ----------
+function outDims(p) { const r = p.rot % 180 !== 0; return r ? [p.h, p.w] : [p.w, p.h]; }
+function tf(p) {
+  const { w, h } = p;
+  switch (p.rot) {
+    case 90: return (x, y) => [h - y, x];
+    case 180: return (x, y) => [w - x, h - y];
+    case 270: return (x, y) => [y, w - x];
+    default: return (x, y) => [x, y];
+  }
+}
+// width in device units (points). ps µm per point → 1 mm = 1000/ps points
+function penW(p, pr) { const mm = S.thick * (0.55 + 0.9 * Math.min(1, pr / p.pmax)); return mm * 1000 / p.ps; }
+
+function drawPage(canvas, p, pxWidth) {
+  const [W, H] = outDims(p); const k = pxWidth / W;
+  canvas.width = Math.round(W * k); canvas.height = Math.round(H * k);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = ctx.fillStyle = '#16181d'; ctx.lineCap = ctx.lineJoin = 'round';
+  const T = tf(p);
+  for (const s of p.strokes) {
+    if (s.length === 3) { const [x, y] = T(s[0], s[1]); ctx.beginPath(); ctx.arc(x * k, y * k, Math.max(.5, penW(p, s[2]) * k / 2), 0, 7); ctx.fill(); continue; }
+    for (let i = 3; i < s.length; i += 3) {
+      const [x0, y0] = T(s[i - 3], s[i - 2]); const [x1, y1] = T(s[i], s[i + 1]);
+      ctx.lineWidth = Math.max(.6, penW(p, (s[i - 1] + s[i + 2]) / 2) * k);
+      ctx.beginPath(); ctx.moveTo(x0 * k, y0 * k); ctx.lineTo(x1 * k, y1 * k); ctx.stroke();
+    }
+  }
+}
+
+// ---------- exports ----------
+function fmtDate(t) { return new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+function fileStamp(t) { const d = new Date(t), f = v => String(v).padStart(2, '0'); return `${d.getFullYear()}-${f(d.getMonth() + 1)}-${f(d.getDate())}_${f(d.getHours())}${f(d.getMinutes())}${f(d.getSeconds())}`; }
+
+function toSVG(p) {
+  const [W, H] = outDims(p); const mm = p.ps / 1000; const T = tf(p);
+  let paths = '';
+  for (const s of p.strokes) {
+    let cur = null, d = '', prev = null;
+    const flush = () => { if (d) paths += `<path d="${d}" stroke-width="${cur}"/>\n`; d = ''; };
+    for (let i = 0; i < s.length; i += 3) {
+      const [x, y] = T(s[i], s[i + 1]); const wv = (Math.round(penW(p, s[i + 2]) * mm * 10) / 10).toFixed(1);
+      const pt = `${(x * mm).toFixed(2)} ${(y * mm).toFixed(2)}`;
+      if (wv !== cur) { flush(); cur = wv; d = prev ? `M${prev} L${pt}` : `M${pt}`; }
+      else d += ` L${pt}`;
+      prev = pt;
+    }
+    if (s.length === 3) d += ' l0 0';
+    flush();
+  }
+  const Wm = (W * mm).toFixed(2), Hm = (H * mm).toFixed(2);
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${Wm}mm" height="${Hm}mm" viewBox="0 0 ${Wm} ${Hm}">\n<rect width="100%" height="100%" fill="#fff"/>\n<g fill="none" stroke="#16181d" stroke-linecap="round" stroke-linejoin="round">\n${paths}</g>\n</svg>\n`;
+}
+
+function toPDF(pages) { // minimal vector PDF writer, one page per drawing
+  const objs = []; const add = s => { objs.push(s); return objs.length; };
+  const catalog = add(null), pagesObj = add(null); const kids = [];
+  const MMPT = 72 / 25.4;
+  for (const p of pages) {
+    const [W, H] = outDims(p); const mm = p.ps / 1000; const T = tf(p);
+    const pw = W * mm * MMPT, ph = H * mm * MMPT;
+    let c = '1 1 1 rg 0 0 ' + pw.toFixed(2) + ' ' + ph.toFixed(2) + ' re f\n0.086 0.094 0.114 RG 1 J 1 j\n';
+    for (const s of p.strokes) {
+      let lastW = null;
+      for (let i = 0; i < s.length; i += 3) {
+        const [x, y] = T(s[i], s[i + 1]); const X = (x * mm * MMPT).toFixed(2), Y = (ph - y * mm * MMPT).toFixed(2);
+        const wv = (penW(p, s[i + 2]) * mm * MMPT).toFixed(2);
+        if (i === 0) { c += `${wv} w ${X} ${Y} m`; lastW = wv; if (s.length === 3) c += ` ${X} ${Y} l S\n`; continue; }
+        if (wv !== lastW) { c += ` ${X} ${Y} l S ${wv} w ${X} ${Y} m`; lastW = wv; } else c += ` ${X} ${Y} l`;
+      }
+      if (s.length > 3) c += ' S\n';
+    }
+    const cs = add(`<< /Length ${c.length} >>\nstream\n${c}\nendstream`);
+    kids.push(add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pw.toFixed(2)} ${ph.toFixed(2)}] /Contents ${cs} 0 R /Resources << >> >>`));
+  }
+  objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
+  objs[pagesObj - 1] = `<< /Type /Pages /Kids [${kids.map(k => k + ' 0 R').join(' ')}] /Count ${kids.length} >>`;
+  let out = '%PDF-1.4\n'; const offs = [];
+  objs.forEach((o, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const x = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
+  out += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${x}\n%%EOF\n`;
+  return new Blob([out], { type: 'application/pdf' });
+}
+
+async function toPNG(p) {
+  const c = document.createElement('canvas'); const [W] = outDims(p);
+  drawPage(c, p, Math.round(W * p.ps / 1000 / 25.4 * 200)); // 200 dpi
+  return new Promise(r => c.toBlob(r, 'image/png'));
+}
+
+function offerFile(blob, name) {
+  const file = new File([blob], name, { type: blob.type });
+  const canShare = navigator.canShare && navigator.canShare({ files: [file] });
+  const card = $('sheetCard'); card.innerHTML = '';
+  const h = document.createElement('h3'); h.textContent = name;
+  const p = document.createElement('p'); p.style.margin = '0'; p.style.color = 'var(--muted)'; p.textContent = `${(blob.size / 1024).toFixed(0)} KB`;
+  card.append(h, p);
+  const mk = (label, cls, fn) => { const b = document.createElement('button'); b.className = 'btn ' + cls; b.textContent = label; b.onclick = fn; card.append(b); return b; };
+  mk('Save to phone', 'primary', () => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); closeSheet(); toast('Saved to Downloads'); });
+  if (canShare) mk('Share…', '', async () => { try { await navigator.share({ files: [file], title: name }); } catch {} closeSheet(); });
+  mk('Cancel', '', closeSheet);
+  $('sheet').hidden = false;
+}
+function closeSheet() { $('sheet').hidden = true; }
+function confirmSheet(title, body, okLabel, fn) {
+  const card = $('sheetCard'); card.innerHTML = '';
+  const h = document.createElement('h3'); h.textContent = title; const p = document.createElement('p'); p.style.margin = '0'; p.style.color = 'var(--muted)'; p.textContent = body;
+  const ok = document.createElement('button'); ok.className = 'btn primary'; ok.style.background = 'var(--danger)'; ok.style.borderColor = 'var(--danger)'; ok.style.color = '#fff'; ok.textContent = okLabel;
+  ok.onclick = async () => { closeSheet(); await fn(); };
+  const no = document.createElement('button'); no.className = 'btn'; no.textContent = 'Cancel'; no.onclick = closeSheet;
+  card.append(h, p, ok, no); $('sheet').hidden = false;
+}
+$('sheet').addEventListener('click', e => { if (e.target.id === 'sheet') closeSheet(); });
+
+// ---------- gallery ----------
+async function loadPages() {
+  S.pages = (await Store.all()).sort((a, b) => b.created - a.created);
+  renderGrid();
+}
+function renderGrid() {
+  const g = $('grid'); g.innerHTML = '';
+  $('count').textContent = `${S.pages.length} page${S.pages.length === 1 ? '' : 's'}`;
+  $('empty').hidden = S.pages.length > 0;
+  $('pageTools').hidden = S.selecting || !S.pages.length; $('selTools').hidden = !S.selecting;
+  $('pagesPanel').classList.toggle('selecting', S.selecting);
+  $('selCount').textContent = `${S.sel.size} selected`;
+  for (const p of S.pages) {
+    const b = document.createElement('button'); b.className = 'tile' + (S.sel.has(p.id) ? ' sel' : '');
+    const c = document.createElement('canvas'); drawPage(c, p, 320);
+    const m = document.createElement('span'); m.className = 'meta'; m.textContent = fmtDate(p.created);
+    const t = document.createElement('span'); t.className = 'tick';
+    b.append(c, m, t); b.setAttribute('aria-label', 'Page from ' + fmtDate(p.created));
+    b.onclick = () => { if (S.selecting) { S.sel.has(p.id) ? S.sel.delete(p.id) : S.sel.add(p.id); renderGrid(); } else openViewer(p); };
+    g.append(b);
+  }
+}
+
+// ---------- viewer ----------
+function openViewer(p) {
+  S.viewing = p; $('viewer').hidden = false; $('vTitle').textContent = fmtDate(p.created); drawViewer();
+  history.pushState({ v: 1 }, '');
+}
+function drawViewer() {
+  const p = S.viewing; if (!p) return; const c = $('vCanvas');
+  const [W, H] = outDims(p); const box = document.querySelector('.vbody').getBoundingClientRect();
+  const fit = Math.min((box.width - 32) / W, (box.height - 32) / H);
+  const cssW = W * fit; drawPage(c, p, Math.round(cssW * (window.devicePixelRatio || 1)));
+  c.style.width = cssW + 'px'; c.style.height = H * fit + 'px';
+}
+function closeViewer() { S.viewing = null; $('viewer').hidden = true; }
+window.addEventListener('popstate', () => { if (!$('viewer').hidden) closeViewer(); });
+$('vBack').onclick = () => history.back();
+$('vRot').onclick = async () => {
+  const p = S.viewing; p.rot = (p.rot + 90) % 360; S.defRot = p.rot; lsSet('folio.rot', p.rot);
+  await Store.put(p); drawViewer(); renderGrid();
+};
+$('vDel').onclick = () => confirmSheet('Delete this page?', 'It will be removed from this phone. This can\'t be undone.', 'Delete', async () => {
+  await Store.del(S.viewing.id); history.back(); await loadPages(); toast('Page deleted');
+});
+document.querySelectorAll('[data-exp]').forEach(b => b.onclick = async () => {
+  const p = S.viewing, k = b.dataset.exp, base = 'folio_' + fileStamp(p.created);
+  if (k === 'png') offerFile(await toPNG(p), base + '.png');
+  if (k === 'svg') offerFile(new Blob([toSVG(p)], { type: 'image/svg+xml' }), base + '.svg');
+  if (k === 'pdf') offerFile(toPDF([p]), base + '.pdf');
+});
+window.addEventListener('resize', () => S.viewing && drawViewer());
+
+// ---------- wiring ----------
+$('btnPair').onclick = () => pair(false);
+$('btnAllDevices').onclick = () => pair(true);
+$('btnRepair').onclick = () => { S.dev = null; renderChrome(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+$('btnSync').onclick = sync;
+$('btnSelect').onclick = () => { S.selecting = true; S.sel.clear(); renderGrid(); };
+$('btnSelDone').onclick = () => { S.selecting = false; S.sel.clear(); renderGrid(); };
+$('btnSelAll').onclick = () => { S.pages.forEach(p => S.sel.add(p.id)); renderGrid(); };
+$('btnSelPdf').onclick = () => { const ps = S.pages.filter(p => S.sel.has(p.id)).reverse(); if (!ps.length) return toast('Select some pages first'); offerFile(toPDF(ps), `folio_${ps.length}-pages_${fileStamp(Date.now())}.pdf`); };
+$('btnPdfAll').onclick = () => { if (!S.pages.length) return; const ps = [...S.pages].reverse(); offerFile(toPDF(ps), `folio_all-pages_${fileStamp(Date.now())}.pdf`); };
+$('btnSelDel').onclick = () => { if (!S.sel.size) return toast('Select some pages first'); confirmSheet(`Delete ${S.sel.size} page${S.sel.size === 1 ? '' : 's'}?`, 'They will be removed from this phone. This can\'t be undone.', 'Delete', async () => { for (const id of S.sel) await Store.del(id); S.sel.clear(); S.selecting = false; await loadPages(); toast('Deleted'); }); };
+$('thick').value = S.thick;
+$('thick').oninput = e => { S.thick = +e.target.value; lsSet('folio.thick', S.thick); renderGrid(); };
+$('btnCopyLog').onclick = async () => { const t = LOG.join('\n') || '(empty)'; try { await navigator.clipboard.writeText(t); toast('Log copied'); } catch { const r = document.createRange(); r.selectNodeContents($('log')); getSelection().removeAllRanges(); getSelection().addRange(r); toast('Log selected, copy it manually'); } };
+$('btnCopyKey').onclick = async () => { try { await navigator.clipboard.writeText(hex(S.dev.key).replace(/ /g, '')); toast('Device key copied'); } catch { toast('Couldn\'t copy'); } };
+$('btnForget').onclick = () => confirmSheet('Forget this Folio?', 'Your pages stay here. You\'ll need to pair again (hold the button 6 s) before the next sync.', 'Forget', async () => { S.dev = null; S.battery = null; lsSet('folio.device', null); renderChrome(); });
+$('settings').addEventListener('toggle', () => { if ($('settings').open) { $('log').textContent = LOG.slice(-400).join('\n') || 'Nothing yet.'; } });
+
+(async function init() {
+  if (!navigator.bluetooth) {
+    $('noBt').hidden = false;
+    if (/iPhone|iPad/.test(navigator.userAgent)) $('noBtMsg').textContent = 'iPhones and iPads don\'t allow web pages to use Bluetooth. Open this page in Chrome on an Android phone or on a computer.';
+  } else {
+    try { if (!(await navigator.bluetooth.getAvailability())) setStatus('Bluetooth looks switched off. Turn it on to pair or sync.', 'err'); } catch {}
+  }
+  log(`Folio Sync started · ${navigator.userAgent}`);
+  await Store.open();
+  if (!Store.ok) setStatus('This browser won\'t let the page store data, so synced pages will only last until you close it. Avoid private/incognito mode.', 'err');
+  renderChrome(); await loadPages();
+})();
+</script>
+</body>
+</html>
