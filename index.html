@@ -380,6 +380,7 @@ const P = { SPARK: 1, SLATE: 2, INTUOS_PRO: 3 };
 const PNAME = { 1: 'Spark', 2: 'Slate/Folio', 3: 'Intuos Pro Paper' };
 const ERR = { 1: 'general error', 2: 'the Folio is not ready', 3: 'read-only setting', 4: 'command not supported', 7: 'wrong device key' };
 
+class GoneError extends Error { constructor() { super('The device closed the Bluetooth connection.'); this.name = 'GoneError'; } }
 class DeviceError extends Error { constructor(code) { super(`Device replied: ${ERR[code] || 'error ' + code}`); this.code = code; } }
 
 class WacomLink {
@@ -389,6 +390,12 @@ class WacomLink {
   }
   async connect() {
     log(`connecting to ${this.device.name || this.device.id}`);
+    this.gone = false;
+    if (!this.device.__folioDisc && this.device.addEventListener) {
+      this.device.addEventListener('gattserverdisconnected', () => { const L = this.device.__folioLink; if (L) { L.gone = true; log('device disconnected'); if (L.waiter) { const w = L.waiter; L.waiter = null; w(); } } });
+      this.device.__folioDisc = true;
+    }
+    this.device.__folioLink = this;
     this.server = await this.device.gatt.connect();
     const nus = await this.server.getPrimaryService(UUID.NUS);
     this.tx = await nus.getCharacteristic(UUID.NUS_TX);
@@ -421,12 +428,15 @@ class WacomLink {
     if (this.msgs.length && this.waiter) { const w = this.waiter; this.waiter = null; w(); }
   }
   async next(timeout = 5000) {
+    if (!this.msgs.length && this.gone) throw new GoneError();
     if (!this.msgs.length) {
       await new Promise(res => { const t = setTimeout(() => { this.waiter = null; res(); }, timeout); this.waiter = () => { clearTimeout(t); res(); }; });
     }
+    if (!this.msgs.length && this.gone) throw new GoneError();
     return this.msgs.shift() || null;
   }
   async send(op, args = [0]) {
+    if (this.gone) throw new GoneError();
     const buf = new Uint8Array([op, args.length, ...args]);
     log('TX ' + hex(buf));
     if (this.tx.writeValueWithResponse) {
@@ -460,18 +470,20 @@ function nowBcd() {
 }
 function newKey() { const b = new Uint8Array(6); crypto.getRandomValues(b); return Array.from(b); }
 
-async function trySetTime(L, proto) {
-  // Setting the Folio's clock only affects page timestamps; never let it block a sync.
-  for (let i = 0; i < 2; i++) {
-    try { await Proto.setTime(L, proto); return; }
-    catch (e) { log(`set time attempt ${i + 1} failed: ${e.message}`); if (e instanceof DeviceError) return; }
+async function trySetTime(L, proto, quick = false) {
+  // Setting the clock only affects page timestamps; never let it block a sync.
+  // The Spark hangs up ~10 s after waking, so there we try once, briefly.
+  const tries = quick ? 1 : 2, timeout = quick ? 1500 : 6000;
+  for (let i = 0; i < tries; i++) {
+    try { await Proto.setTime(L, proto, timeout); return; }
+    catch (e) { if (e instanceof GoneError) throw e; log(`set time attempt ${i + 1} failed: ${e.message}`); if (e instanceof DeviceError) return; }
   }
   L.msgs = []; // drop anything late so later replies line up
 }
 const Proto = {
-  async setTime(L, proto) {
-    if (proto === P.INTUOS_PRO) { const t = Math.floor(Date.now() / 1000); await L.req(0xb6, [t & 255, (t >> 8) & 255, (t >> 16) & 255, (t >>> 24) & 255, 0, 0]); }
-    else await L.req(0xb6, nowBcd());
+  async setTime(L, proto, timeout = 6000) {
+    if (proto === P.INTUOS_PRO) { const t = Math.floor(Date.now() / 1000); await L.req(0xb6, [t & 255, (t >> 8) & 255, (t >> 16) & 255, (t >>> 24) & 255, 0, 0], { timeout }); }
+    else await L.req(0xb6, nowBcd(), { timeout });
   },
   async battery(L) { const m = await L.req(0xb9, [0], { expect: [0xba] }); return { pct: m.data[0], charging: m.data[1] === 1 }; },
   async name(L, proto) {
@@ -557,6 +569,11 @@ async function pickDevice(all = false) {
 }
 
 function friendlyError(e) {
+  if (e instanceof GoneError || /GATT Server is disconnected/.test(e.message || '')) {
+    return S.dev && S.dev.proto === P.SPARK
+      ? 'The Spark hung up. It only accepts a connection when it has saved pages and for a few seconds after you press its button. Save a page (press the button after drawing), then press the button once more and tap Sync right away.'
+      : 'The device closed the connection. Press its button once and tap Sync right away.';
+  }
   if (e.name === 'NotFoundError') return 'No device chosen. If your Folio wasn\'t in the list, check Bluetooth and Location are on and the light is on, then try again.';
   if (e.name === 'SecurityError') return 'This page isn\'t allowed to use Bluetooth. Open it directly in Chrome (not inside another app).';
   if (e.name === 'NetworkError') return 'Lost the Bluetooth connection. Press the Folio\'s button and try again.';
@@ -688,23 +705,24 @@ async function sync(opts = {}) {
     setStatus(auto ? 'Folio woke up, syncing…' : 'Connecting…', '', 'amber');
     await L.connect();
     await Proto.connectWithKey(L, d.key, d.proto);
-    if (d.proto === P.SPARK) { try { await L.req(0xe3, [0]); } catch (e) { log('e3: ' + e.message); } }
-    await trySetTime(L, d.proto);
-    try { S.battery = await Proto.battery(L); renderChrome(); } catch (e) { log('battery: ' + e.message); }
-    try { Object.assign(d, await Proto.dims(L, d.proto)); saveDevice(); } catch (e) { log('dims: ' + e.message); }
+    const spark = d.proto === P.SPARK;
+    if (spark) { try { await L.req(0xe3, [0], { timeout: 1500 }); } catch (e) { if (e instanceof GoneError) throw e; log('e3: ' + e.message); } }
+    else await trySetTime(L, d.proto);
+    if (!spark) { try { S.battery = await Proto.battery(L); renderChrome(); } catch (e) { if (e instanceof GoneError) throw e; log('battery: ' + e.message); } }
+    if (!spark) { try { Object.assign(d, await Proto.dims(L, d.proto)); saveDevice(); } catch (e) { if (e instanceof GoneError) throw e; log('dims: ' + e.message); } }
     if (d.proto !== P.SPARK) await L.req(0xec, [6, 0, 0, 0, 0, 0]);
     await L.req(0xb1, [1]); // paper mode
     const c = await L.req(0xc1, [0], { expect: [0xc2] });
     const total = d.proto === P.SPARK ? (c.data[0] << 8 | c.data[1]) : u16(c.data, 0);
     log(`${total} page(s) on device`);
-    if (!total) { setStatus('Connected. No new pages on the Folio.', 'ok', 'on'); return; }
+    if (!total) { setStatus(`Connected. No new pages on the ${d.name || 'Folio'}.`, 'ok', 'on'); return; }
     for (let n = 0; n < total; n++) {
       setStatus(`Downloading page ${n + 1} of ${total}…`, '', 'amber'); setProgress(n / total);
       // stroke info: size + timestamp
       let ts = Date.now();
       if (d.proto === P.SPARK) {
         await L.send(0xc5, [0]);
-        for (let k = 0; k < 2; k++) { const m = await L.next(3000); if (!m) break; if (m.op === 0xcd) { ts = bcdTime(m.data); break; } }
+        for (let k = 0; k < 2; k++) { const m = await L.next(1500); if (!m) break; if (m.op === 0xcd) { ts = bcdTime(m.data); break; } }
       } else {
         const m = await L.req(0xcc, [0], { expect: [0xcf] });
         ts = d.proto === P.INTUOS_PRO ? u32(m.data, 4) * 1000 : bcdTime(m.data.slice(4, 10));
