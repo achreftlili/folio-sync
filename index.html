@@ -334,8 +334,12 @@ const Store = {
   async open() {
     try {
       this.db = await new Promise((res, rej) => {
-        const r = indexedDB.open('folio-sync', 1);
-        r.onupgradeneeded = () => r.result.createObjectStore('pages', { keyPath: 'id' });
+        const r = indexedDB.open('folio-sync', 2);
+        r.onupgradeneeded = () => {
+          const db = r.result;
+          if (!db.objectStoreNames.contains('pages')) db.createObjectStore('pages', { keyPath: 'id' });
+          if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
+        };
         r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
       });
       this.ok = true;
@@ -353,6 +357,14 @@ const Store = {
     return this.tx('readonly', s => new Promise(r => { const q = s.getAll(); q.onsuccess = () => r(q.result); }));
   },
   async put(p) { if (!this.ok) { this.mem.set(p.id, p); return; } await this.tx('readwrite', s => { s.put(p); }); },
+  async getMeta(k) {
+    if (!this.ok) return null;
+    try { return await new Promise(r => { const q = this.db.transaction('meta').objectStore('meta').get(k); q.onsuccess = () => r(q.result ?? null); q.onerror = () => r(null); }); } catch { return null; }
+  },
+  async setMeta(k, v) {
+    if (!this.ok) return;
+    try { await new Promise(r => { const t = this.db.transaction('meta', 'readwrite'); t.objectStore('meta').put(v, k); t.oncomplete = r; t.onerror = r; }); } catch {}
+  },
   async del(id) { if (!this.ok) { this.mem.delete(id); return; } await this.tx('readwrite', s => { s.delete(id); }); },
 };
 
@@ -422,7 +434,8 @@ class WacomLink {
       await this.tx.writeValueWithoutResponse(buf);
     } else await this.tx.writeValue(buf);
   }
-  async req(op, args = [0], { timeout = 5000, expect } = {}) {
+  async req(op, args = [0], { timeout = 6000, expect } = {}) {
+    if (this.msgs.length) { log('dropping stale: ' + this.msgs.map(m => m.op.toString(16)).join(',')); this.msgs = []; }
     await this.send(op, args);
     const m = await this.next(timeout);
     if (!m) throw new Error(`No reply to command ${op.toString(16)}`);
@@ -447,6 +460,14 @@ function nowBcd() {
 }
 function newKey() { const b = new Uint8Array(6); crypto.getRandomValues(b); return Array.from(b); }
 
+async function trySetTime(L, proto) {
+  // Setting the Folio's clock only affects page timestamps; never let it block a sync.
+  for (let i = 0; i < 2; i++) {
+    try { await Proto.setTime(L, proto); return; }
+    catch (e) { log(`set time attempt ${i + 1} failed: ${e.message}`); if (e instanceof DeviceError) return; }
+  }
+  L.msgs = []; // drop anything late so later replies line up
+}
 const Proto = {
   async setTime(L, proto) {
     if (proto === P.INTUOS_PRO) { const t = Math.floor(Date.now() / 1000); await L.req(0xb6, [t & 255, (t >> 8) & 255, (t >> 16) & 255, (t >>> 24) & 255, 0, 0]); }
@@ -497,6 +518,7 @@ const S = {
   battery: null, viewing: null, auto: lsGet('folio.auto', true),
 };
 
+function saveDevice() { lsSet('folio.device', S.dev); Store.setMeta('device', S.dev); }
 function setStatus(text, kind = '', led = '') {
   $('statusBox').hidden = !text; $('statusText').textContent = text || '';
   $('status').className = 'status' + (kind ? ' ' + kind : '');
@@ -570,7 +592,7 @@ async function pair(all = false) {
     log('button confirmed, protocol ' + PNAME[proto]);
     setStatus('Finishing setup…', '', 'amber');
     if (proto === P.SPARK) { try { await L.req(0xe5, [0]); } catch (e) { log('register-complete: ' + e.message); } }
-    await Proto.setTime(L, proto);
+    await trySetTime(L, proto);
     if (proto !== P.SPARK) { try { await L.req(0xec, [6, 0, 0, 0, 0, 0]); } catch (e) { log('transfer type: ' + e.message); } }
     let name = device.name || 'Folio';
     try { name = (await Proto.name(L, proto)) || name; } catch (e) { log('name: ' + e.message); }
@@ -578,7 +600,7 @@ async function pair(all = false) {
     const fw = await Proto.firmware(L);
     try { S.battery = await Proto.battery(L); } catch (e) { log('battery: ' + e.message); }
     S.dev = { id: device.id, key, proto, name, ...dm, fw };
-    lsSet('folio.device', S.dev);
+    saveDevice();
     log('paired: ' + JSON.stringify(S.dev));
     setStatus(`Paired with ${name}. That's done for good: from now on just save pages with the button and sync.`, 'ok', 'on');
   } catch (e) {
@@ -660,16 +682,16 @@ async function sync(opts = {}) {
       if (auto) return;
       setStatus('Tap your Folio in the list…', '', 'amber');
       device = await pickDevice();
-      if (device.id !== d.id) { log(`device id changed ${d.id} → ${device.id}; keeping pairing key`); d.id = device.id; lsSet('folio.device', d); }
+      if (device.id !== d.id) { log(`device id changed ${d.id} → ${device.id}; keeping pairing key`); d.id = device.id; saveDevice(); }
     }
     L = new WacomLink(device);
     setStatus(auto ? 'Folio woke up, syncing…' : 'Connecting…', '', 'amber');
     await L.connect();
     await Proto.connectWithKey(L, d.key, d.proto);
     if (d.proto === P.SPARK) { try { await L.req(0xe3, [0]); } catch (e) { log('e3: ' + e.message); } }
-    await Proto.setTime(L, d.proto);
+    await trySetTime(L, d.proto);
     try { S.battery = await Proto.battery(L); renderChrome(); } catch (e) { log('battery: ' + e.message); }
-    try { Object.assign(d, await Proto.dims(L, d.proto)); lsSet('folio.device', d); } catch (e) { log('dims: ' + e.message); }
+    try { Object.assign(d, await Proto.dims(L, d.proto)); saveDevice(); } catch (e) { log('dims: ' + e.message); }
     if (d.proto !== P.SPARK) await L.req(0xec, [6, 0, 0, 0, 0, 0]);
     await L.req(0xb1, [1]); // paper mode
     const c = await L.req(0xc1, [0], { expect: [0xc2] });
@@ -916,7 +938,7 @@ $('thick').value = S.thick;
 $('thick').oninput = e => { S.thick = +e.target.value; lsSet('folio.thick', S.thick); renderGrid(); };
 $('btnCopyLog').onclick = async () => { const t = LOG.join('\n') || '(empty)'; try { await navigator.clipboard.writeText(t); toast('Log copied'); } catch { const r = document.createRange(); r.selectNodeContents($('log')); getSelection().removeAllRanges(); getSelection().addRange(r); toast('Log selected, copy it manually'); } };
 $('btnCopyKey').onclick = async () => { try { await navigator.clipboard.writeText(hex(S.dev.key).replace(/ /g, '')); toast('Device key copied'); } catch { toast('Couldn\'t copy'); } };
-$('btnForget').onclick = () => confirmSheet('Forget this Folio?', 'Your pages stay here. You\'ll need to pair again (hold the button 6 s) before the next sync.', 'Forget', async () => { stopWatching(); S.dev = null; S.battery = null; lsSet('folio.device', null); renderChrome(); });
+$('btnForget').onclick = () => confirmSheet('Forget this Folio?', 'Your pages stay here. You\'ll need to pair again (hold the button 6 s) before the next sync.', 'Forget', async () => { stopWatching(); S.dev = null; S.battery = null; saveDevice(); renderChrome(); });
 $('settings').addEventListener('toggle', () => { if ($('settings').open) { $('log').textContent = LOG.slice(-400).join('\n') || 'Nothing yet.'; } });
 
 (async function init() {
@@ -928,6 +950,8 @@ $('settings').addEventListener('toggle', () => { if ($('settings').open) { $('lo
   }
   log(`Folio Sync started · ${navigator.userAgent}`);
   await Store.open();
+  try { await navigator.storage?.persist?.(); } catch {}
+  if (!S.dev) { const saved = await Store.getMeta('device'); if (saved) { S.dev = saved; lsSet('folio.device', saved); log('restored pairing from backup'); } }
   if (!Store.ok) setStatus('This browser won\'t let the page store data, so synced pages will only last until you close it. Avoid private/incognito mode.', 'err');
   renderChrome(); await loadPages();
   if (S.dev && navigator.bluetooth) startWatching();
