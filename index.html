@@ -86,6 +86,23 @@ main{padding-block:20px 60px;display:grid;gap:20px}
 .tile.sel .tick{background:var(--accent);border-color:var(--accent)}
 .tile.sel .tick::after{content:"";position:absolute;left:7px;top:3px;width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
 .tile.sel canvas{outline:3px solid var(--accent);outline-offset:-1px}
+.day{grid-column:1/-1;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.02em;text-transform:uppercase;margin-top:6px;display:flex;justify-content:space-between;align-items:center}
+.day button{font:inherit;text-transform:none;letter-spacing:0;font-weight:500;color:var(--accent);background:none;border:0;padding:4px;cursor:pointer}
+.tile .thumb{width:100%;aspect-ratio:var(--ar,0.7);background:var(--paper);border:1px solid var(--line);border-radius:6px;display:block;object-fit:contain}
+.tile.sel .thumb{outline:3px solid var(--accent);outline-offset:-1px}
+.tile{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.sticky{position:sticky;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:4;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:8px;box-shadow:0 6px 24px rgba(0,0,0,.15)}
+.hintline{font-size:13px}
+.vtop .title{display:flex;align-items:baseline;min-width:0}
+#vTitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.vcount{flex:none;margin-left:8px;color:var(--muted);font-weight:500;font-variant-numeric:tabular-nums}
+.vbody{position:relative}
+.vnav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;opacity:.9}
+.vnav.prev{left:8px} .vnav.next{right:8px}
+.vnav:disabled{opacity:.25;cursor:default}
+.toast{display:flex;align-items:center;gap:14px}
+.toast button{background:none;border:0;color:var(--accent-soft);font-weight:700;padding:4px 2px;cursor:pointer;text-transform:uppercase;letter-spacing:.04em;font-size:13px}
+@media (hover:none){.vnav{display:none}}
 .empty{border:1.5px dashed var(--line);border-radius:12px;padding:28px 18px;text-align:center;color:var(--muted);margin-top:14px}
 .selbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
 details.panel summary{cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between;align-items:center}
@@ -125,7 +142,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 </head>
 <body>
 <header class="bar"><div class="wrap">
-  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync <small style="font-weight:500;color:var(--muted);font-size:12px">v8</small></div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Folio Sync <small style="font-weight:500;color:var(--muted);font-size:12px">v9</small></div>
   <div class="chip" id="chip"><span class="led" id="chipLed"></span><span id="chipText">No Folio paired</span></div>
 </div></header>
 
@@ -178,10 +195,12 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
     <div class="selbar" id="pageTools">
       <button class="btn" id="btnSelect">Select</button>
       <button class="btn" id="btnPdfAll">Export all as PDF</button>
+      <span class="count hintline">Tip: long-press a page to select it.</span>
     </div>
-    <div class="selbar" id="selTools" hidden>
+    <div class="selbar sticky" id="selTools" hidden>
       <span class="count" id="selCount">0 selected</span>
       <button class="btn" id="btnSelAll">Select all</button>
+      <button class="btn" id="btnSelRot" aria-label="Rotate selected">Rotate</button>
       <button class="btn" id="btnSelPdf">PDF</button>
       <button class="btn danger" id="btnSelDel">Delete</button>
       <button class="btn" id="btnSelDone">Done</button>
@@ -216,11 +235,15 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 <div class="viewer" id="viewer" hidden>
   <div class="vtop">
     <button class="icon" id="vBack" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
-    <div class="title" id="vTitle"></div>
+    <div class="title"><span id="vTitle"></span><span class="vcount" id="vCount"></span></div>
     <button class="icon" id="vRot" aria-label="Rotate"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg></button>
     <button class="icon" id="vDel" aria-label="Delete page"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>
   </div>
-  <div class="vbody"><canvas id="vCanvas"></canvas></div>
+  <div class="vbody" id="vBody">
+    <button class="icon vnav prev" id="vPrev" aria-label="Previous page"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <canvas id="vCanvas"></canvas>
+    <button class="icon vnav next" id="vNext" aria-label="Next page"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+  </div>
   <div class="vbar">
     <button class="btn" data-exp="png">PNG</button>
     <button class="btn" data-exp="svg">SVG</button>
@@ -230,7 +253,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 
 <!-- Confirm / export sheet -->
 <div class="sheet" id="sheet" hidden><div class="card" id="sheetCard"></div></div>
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" hidden><span id="toastMsg"></span><button id="toastAct" hidden></button></div>
 
 <script>
 'use strict';
@@ -241,7 +264,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
    ================================================================ */
 
 // ---------- small helpers ----------
-const APP_VERSION = 'v8 (Spark reconnect fix)';
+const APP_VERSION = 'v9 (page management)';
 const $ = id => document.getElementById(id);
 const hex = a => Array.from(a, b => b.toString(16).padStart(2, '0')).join(' ');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -254,7 +277,12 @@ function log(msg) {
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 let toastT;
-function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2800); }
+function toast(msg, action, fn, ms = 2800) {
+  const t = $('toast'); $('toastMsg').textContent = msg; t.hidden = false;
+  const b = $('toastAct'); b.hidden = !action;
+  if (action) { b.textContent = action; b.onclick = () => { t.hidden = true; clearTimeout(toastT); fn && fn(); }; }
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, action ? Math.max(ms, 6000) : ms);
+}
 
 // ---------- CRC32 ----------
 const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -575,6 +603,9 @@ function setProgress(f) { $('progWrap').hidden = f == null; if (f != null) $('pr
 function renderChrome() {
   const d = S.dev;
   $('pairPanel').hidden = !!d; $('syncPanel').hidden = !d;
+  const isSpark = !!(d && d.proto === P.SPARK);
+  document.querySelector('label.toggle').hidden = isSpark;
+  if (isSpark) $('autoNote').hidden = true;
   if (d) $('syncHint').textContent = d.proto === P.SPARK
     ? `No need to pair again. Save pages on the ${d.name || 'Spark'} with its button. To sync: tap Sync pages first, then press the Spark's button once.`
     : 'No need to pair again. Save a page on the Folio with its button, then tap Sync. Pages are copied here and cleared from the device\'s memory.';
@@ -705,7 +736,7 @@ function stopWatching() { try { Auto.abort?.abort(); } catch {} Auto.watching = 
 
 function renderAutoNote() {
   const n = $('autoNote');
-  if (!S.dev) { n.hidden = true; return; }
+  if (!S.dev || S.dev.proto === P.SPARK) { n.hidden = true; return; }
   if (Auto.device && Auto.support.watch) { n.hidden = true; return; }
   if (Auto.device) { n.hidden = false; n.textContent = 'Sync opens straight away without the device list. Automatic sync needs one Chrome setting: open chrome://flags, turn on "Experimental Web Platform features", and restart Chrome.'; return; }
   n.hidden = false;
@@ -756,7 +787,7 @@ async function sparkDownloadOne(L, d) {
   await Store.put({
     id: `${ts}-${crc.toString(16)}`, created: ts, synced: Date.now(),
     w: d.w, h: d.h, ps: d.ps, pmax: 1023, rot: S.defRot,
-    strokes: parsePenData(data).map(s => s.flat()), raw: Array.from(data),
+    strokes: parsePenData(data).map(s => s.flat()), raw: Uint8Array.from(data),
   });
   await loadPages();
   if (!Store.ok) return 'kept';
@@ -932,7 +963,7 @@ async function sync(opts = {}) {
         id: `${ts}-${crc.toString(16)}`, created: ts, synced: Date.now(),
         w: d.w, h: d.h, ps: d.ps, pmax: d.proto === P.INTUOS_PRO ? 8192 : d.proto === P.SLATE ? 2047 : 1023,
         rot: d.proto === P.INTUOS_PRO ? 0 : S.defRot,
-        strokes: strokes.map(s => s.flat()), raw: Array.from(data),
+        strokes: strokes.map(s => s.flat()), raw: Uint8Array.from(data),
       };
       await Store.put(page);
       got++;
@@ -1086,50 +1117,149 @@ function confirmSheet(title, body, okLabel, fn) {
 $('sheet').addEventListener('click', e => { if (e.target.id === 'sheet') closeSheet(); });
 
 // ---------- gallery ----------
+// Thumbnails are rendered once per (page, rotation, ink thickness) and cached,
+// and only when they scroll into view, so long lists stay fast.
+const Thumbs = new Map(); // id -> {key, url}
+const thumbKey = p => `${p.rot}|${S.thick}`;
+function thumbFor(p) {
+  const k = thumbKey(p), hit = Thumbs.get(p.id);
+  if (hit && hit.key === k) return hit.url;
+  const c = document.createElement('canvas'); drawPage(c, p, 360);
+  const url = c.toDataURL('image/png');
+  Thumbs.set(p.id, { key: k, url });
+  return url;
+}
+const thumbIO = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
+  for (const e of entries) if (e.isIntersecting) { const img = e.target; const p = S.pages.find(x => x.id === img.dataset.id); if (p) img.src = thumbFor(p); thumbIO.unobserve(img); }
+}, { rootMargin: '400px' }) : null;
+
 async function loadPages() {
   S.pages = (await Store.all()).sort((a, b) => b.created - a.created);
+  for (const id of [...S.sel]) if (!S.pages.some(p => p.id === id)) S.sel.delete(id);
   renderGrid();
+}
+function dayLabel(t) {
+  const d = new Date(t), today = new Date(); const k = x => x.toDateString();
+  if (k(d) === k(today)) return 'Today';
+  const y = new Date(today); y.setDate(y.getDate() - 1); if (k(d) === k(y)) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+}
+function renderSelBar() {
+  $('pageTools').hidden = S.selecting || !S.pages.length; $('selTools').hidden = !S.selecting;
+  $('pagesPanel').classList.toggle('selecting', S.selecting);
+  $('selCount').textContent = `${S.sel.size} selected`;
+  $('btnSelAll').textContent = S.sel.size === S.pages.length && S.pages.length ? 'Select none' : 'Select all';
+}
+function setSelecting(on) { S.selecting = on; if (!on) S.sel.clear(); renderGrid(); }
+function toggleSel(id, tile) {
+  S.sel.has(id) ? S.sel.delete(id) : S.sel.add(id);
+  if (tile) tile.classList.toggle('sel', S.sel.has(id));
+  if (!S.sel.size) setSelecting(false); else renderSelBar();
 }
 function renderGrid() {
   const g = $('grid'); g.innerHTML = '';
   $('count').textContent = `${S.pages.length} page${S.pages.length === 1 ? '' : 's'}`;
   $('empty').hidden = S.pages.length > 0;
-  $('pageTools').hidden = S.selecting || !S.pages.length; $('selTools').hidden = !S.selecting;
-  $('pagesPanel').classList.toggle('selecting', S.selecting);
-  $('selCount').textContent = `${S.sel.size} selected`;
+  renderSelBar();
+  let lastDay = null;
   for (const p of S.pages) {
+    const day = dayLabel(p.created);
+    if (day !== lastDay) {
+      lastDay = day;
+      const h = document.createElement('div'); h.className = 'day';
+      const lbl = document.createElement('span'); lbl.textContent = day; h.append(lbl);
+      if (S.selecting) {
+        const all = document.createElement('button'); all.textContent = 'Select day';
+        const ids = S.pages.filter(x => dayLabel(x.created) === day).map(x => x.id);
+        all.onclick = () => { const on = !ids.every(id => S.sel.has(id)); ids.forEach(id => on ? S.sel.add(id) : S.sel.delete(id)); if (!S.sel.size) setSelecting(false); else renderGrid(); };
+        h.append(all);
+      }
+      g.append(h);
+    }
     const b = document.createElement('button'); b.className = 'tile' + (S.sel.has(p.id) ? ' sel' : '');
-    const c = document.createElement('canvas'); drawPage(c, p, 320);
-    const m = document.createElement('span'); m.className = 'meta'; m.textContent = fmtDate(p.created);
+    const [W, H] = outDims(p);
+    const img = document.createElement('img'); img.className = 'thumb'; img.alt = ''; img.dataset.id = p.id;
+    img.style.setProperty('--ar', (W / H).toFixed(3));
+    const cached = Thumbs.get(p.id);
+    if (cached && cached.key === thumbKey(p)) img.src = cached.url; else if (thumbIO) thumbIO.observe(img); else img.src = thumbFor(p);
+    const m = document.createElement('span'); m.className = 'meta';
+    m.textContent = new Date(p.created).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
     const t = document.createElement('span'); t.className = 'tick';
-    b.append(c, m, t); b.setAttribute('aria-label', 'Page from ' + fmtDate(p.created));
-    b.onclick = () => { if (S.selecting) { S.sel.has(p.id) ? S.sel.delete(p.id) : S.sel.add(p.id); renderGrid(); } else openViewer(p); };
+    b.append(img, m, t); b.setAttribute('aria-label', 'Page from ' + fmtDate(p.created));
+    // long-press to start selecting
+    let lp = null, fired = false, sx = 0, sy = 0;
+    b.addEventListener('pointerdown', e => { fired = false; sx = e.clientX; sy = e.clientY; lp = setTimeout(() => { fired = true; if (navigator.vibrate) try { navigator.vibrate(15); } catch {} if (!S.selecting) { S.selecting = true; S.sel.add(p.id); renderGrid(); } else toggleSel(p.id, b); }, 450); });
+    const cancel = () => clearTimeout(lp);
+    b.addEventListener('pointerup', cancel); b.addEventListener('pointerleave', cancel); b.addEventListener('pointercancel', cancel);
+    b.addEventListener('pointermove', e => { if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 10) cancel(); });
+    b.addEventListener('contextmenu', e => e.preventDefault());
+    b.onclick = () => { if (fired) { fired = false; return; } if (S.selecting) toggleSel(p.id, b); else openViewer(p); };
     g.append(b);
   }
 }
 
+// Deleting is instant with an Undo, instead of a confirmation step.
+async function deletePages(ids, { fromViewer = false } = {}) {
+  const gone = S.pages.filter(p => ids.includes(p.id));
+  if (!gone.length) return;
+  for (const p of gone) { await Store.del(p.id); Thumbs.delete(p.id); S.sel.delete(p.id); }
+  S.pages = S.pages.filter(p => !ids.includes(p.id));
+  if (S.selecting && !S.sel.size) S.selecting = false;
+  renderGrid();
+  toast(`Deleted ${gone.length} page${gone.length === 1 ? '' : 's'}`, 'Undo', async () => {
+    for (const p of gone) await Store.put(p);
+    await loadPages(); toast(`Restored ${gone.length} page${gone.length === 1 ? '' : 's'}`);
+  }, 7000);
+}
+
 // ---------- viewer ----------
+function viewerIndex() { return S.viewing ? S.pages.findIndex(p => p.id === S.viewing.id) : -1; }
 function openViewer(p) {
-  S.viewing = p; $('viewer').hidden = false; $('vTitle').textContent = fmtDate(p.created); drawViewer();
-  history.pushState({ v: 1 }, '');
+  const wasOpen = !$('viewer').hidden;
+  S.viewing = p; $('viewer').hidden = false; drawViewer();
+  if (!wasOpen) history.pushState({ v: 1 }, '');
 }
 function drawViewer() {
   const p = S.viewing; if (!p) return; const c = $('vCanvas');
-  const [W, H] = outDims(p); const box = document.querySelector('.vbody').getBoundingClientRect();
+  const i = viewerIndex();
+  $('vTitle').textContent = new Date(p.created).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  $('vCount').textContent = S.pages.length > 1 ? `${i + 1} / ${S.pages.length}` : '';
+  $('vPrev').disabled = i <= 0; $('vNext').disabled = i < 0 || i >= S.pages.length - 1;
+  const [W, H] = outDims(p); const box = $('vBody').getBoundingClientRect();
   const fit = Math.min((box.width - 32) / W, (box.height - 32) / H);
   const cssW = W * fit; drawPage(c, p, Math.round(cssW * (window.devicePixelRatio || 1)));
   c.style.width = cssW + 'px'; c.style.height = H * fit + 'px';
 }
+function stepViewer(d) { const i = viewerIndex() + d; if (i >= 0 && i < S.pages.length) { S.viewing = S.pages[i]; drawViewer(); } }
 function closeViewer() { S.viewing = null; $('viewer').hidden = true; }
 window.addEventListener('popstate', () => { if (!$('viewer').hidden) closeViewer(); });
 $('vBack').onclick = () => history.back();
+$('vPrev').onclick = () => stepViewer(-1);
+$('vNext').onclick = () => stepViewer(1);
+document.addEventListener('keydown', e => {
+  if ($('viewer').hidden) return;
+  if (e.key === 'ArrowLeft') stepViewer(-1);
+  else if (e.key === 'ArrowRight') stepViewer(1);
+  else if (e.key === 'Escape') history.back();
+});
+(() => { // swipe between pages
+  let x0 = null, y0 = 0;
+  $('vBody').addEventListener('touchstart', e => { if (e.touches.length === 1) { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; } }, { passive: true });
+  $('vBody').addEventListener('touchend', e => {
+    if (x0 == null) return; const t = e.changedTouches[0]; const dx = t.clientX - x0, dy = t.clientY - y0; x0 = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepViewer(dx < 0 ? 1 : -1);
+  });
+})();
 $('vRot').onclick = async () => {
   const p = S.viewing; p.rot = (p.rot + 90) % 360; S.defRot = p.rot; lsSet('folio.rot', p.rot);
   await Store.put(p); drawViewer(); renderGrid();
 };
-$('vDel').onclick = () => confirmSheet('Delete this page?', 'It will be removed from this phone. This can\'t be undone.', 'Delete', async () => {
-  await Store.del(S.viewing.id); history.back(); await loadPages(); toast('Page deleted');
-});
+$('vDel').onclick = async () => {
+  const p = S.viewing; const i = viewerIndex();
+  await deletePages([p.id], { fromViewer: true });
+  if (!S.pages.length) { history.back(); return; }
+  S.viewing = S.pages[Math.min(i, S.pages.length - 1)]; drawViewer();
+};
 document.querySelectorAll('[data-exp]').forEach(b => b.onclick = async () => {
   const p = S.viewing, k = b.dataset.exp, base = 'folio_' + fileStamp(p.created);
   if (k === 'png') offerFile(await toPNG(p), base + '.png');
@@ -1146,12 +1276,17 @@ $('autoSync').checked = S.auto;
 $('autoSync').onchange = e => { S.auto = e.target.checked; lsSet('folio.auto', S.auto); if (S.auto) startWatching(); };
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.dev) { Auto.watching = false; startWatching(); } });
 $('btnSync').onclick = () => sync();
-$('btnSelect').onclick = () => { S.selecting = true; S.sel.clear(); renderGrid(); };
-$('btnSelDone').onclick = () => { S.selecting = false; S.sel.clear(); renderGrid(); };
-$('btnSelAll').onclick = () => { S.pages.forEach(p => S.sel.add(p.id)); renderGrid(); };
+$('btnSelect').onclick = () => { S.sel.clear(); setSelecting(true); };
+$('btnSelDone').onclick = () => setSelecting(false);
+$('btnSelAll').onclick = () => { if (S.sel.size === S.pages.length) S.sel.clear(); else S.pages.forEach(p => S.sel.add(p.id)); renderGrid(); };
+$('btnSelRot').onclick = async () => {
+  if (!S.sel.size) return toast('Select some pages first');
+  for (const p of S.pages) if (S.sel.has(p.id)) { p.rot = (p.rot + 90) % 360; await Store.put(p); }
+  renderGrid();
+};
 $('btnSelPdf').onclick = () => { const ps = S.pages.filter(p => S.sel.has(p.id)).reverse(); if (!ps.length) return toast('Select some pages first'); offerFile(toPDF(ps), `folio_${ps.length}-pages_${fileStamp(Date.now())}.pdf`); };
 $('btnPdfAll').onclick = () => { if (!S.pages.length) return; const ps = [...S.pages].reverse(); offerFile(toPDF(ps), `folio_all-pages_${fileStamp(Date.now())}.pdf`); };
-$('btnSelDel').onclick = () => { if (!S.sel.size) return toast('Select some pages first'); confirmSheet(`Delete ${S.sel.size} page${S.sel.size === 1 ? '' : 's'}?`, 'They will be removed from this phone. This can\'t be undone.', 'Delete', async () => { for (const id of S.sel) await Store.del(id); S.sel.clear(); S.selecting = false; await loadPages(); toast('Deleted'); }); };
+$('btnSelDel').onclick = () => { if (!S.sel.size) return toast('Select some pages first'); deletePages([...S.sel]); };
 $('thick').value = S.thick;
 $('thick').oninput = e => { S.thick = +e.target.value; lsSet('folio.thick', S.thick); renderGrid(); };
 $('btnCopyLog').onclick = async () => { const t = LOG.join('\n') || '(empty)'; try { await navigator.clipboard.writeText(t); toast('Log copied'); } catch { const r = document.createRange(); r.selectNodeContents($('log')); getSelection().removeAllRanges(); getSelection().addRange(r); toast('Log selected, copy it manually'); } };
