@@ -100,6 +100,10 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--mono);font-size:13px;overflow-wrap:anywhere}
 pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;
   max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:0}
+.toggle{display:flex;gap:12px;align-items:flex-start;margin-top:14px;cursor:pointer}
+.toggle input{width:22px;height:22px;margin:2px 0 0;accent-color:var(--accent);flex:none}
+.toggle .hint{display:block;font-size:13px;color:var(--muted)}
+.autonote{margin-top:10px!important;font-size:13px;color:var(--muted)}
 .warn{border-color:color-mix(in srgb,var(--amber) 50%,var(--line));background:color-mix(in srgb,var(--amber) 9%,var(--surface))}
 /* viewer */
 .viewer{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;
@@ -148,12 +152,16 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
 
   <!-- Sync -->
   <section class="panel" id="syncPanel" hidden>
-    <h2>Sync your pages</h2>
-    <p>Press the Folio's button once to wake it, then tap Sync. Pages are copied here and cleared from the Folio's memory.</p>
+    <h2>Your Folio is paired</h2>
+    <p id="syncHint">No need to pair again. Save a page on the Folio with its button, then tap Sync. Pages are copied here and cleared from the Folio's memory.</p>
     <div class="actions">
       <button class="btn primary grow" id="btnSync">Sync pages</button>
-      <button class="btn" id="btnRepair">Pair again</button>
     </div>
+    <label class="toggle" for="autoSync">
+      <input type="checkbox" id="autoSync">
+      <span><b>Sync automatically</b><span class="hint">While this app is open, new pages come in as soon as you press the Folio's button.</span></span>
+    </label>
+    <p class="autonote" id="autoNote" hidden></p>
   </section>
 
   <div id="statusBox" hidden>
@@ -191,6 +199,7 @@ pre.log{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--li
       <dl class="kv" id="devInfo"></dl>
       <div class="actions" style="margin-top:0">
         <button class="btn" id="btnCopyKey">Copy device key</button>
+        <button class="btn" id="btnRepair">Pair again</button>
         <button class="btn danger" id="btnForget">Forget this Folio</button>
       </div>
       <label>Connection log <span class="hint">If something fails, copy this and send it to whoever helps you debug.</span></label>
@@ -485,7 +494,7 @@ const S = {
   dev: lsGet('folio.device', null), // {id, key:[..6], proto, name, w, h, ps, fw}
   pages: [], selecting: false, sel: new Set(), busy: false,
   thick: lsGet('folio.thick', 0.6), defRot: lsGet('folio.rot', 90),
-  battery: null, viewing: null,
+  battery: null, viewing: null, auto: lsGet('folio.auto', true),
 };
 
 function setStatus(text, kind = '', led = '') {
@@ -529,7 +538,7 @@ function friendlyError(e) {
   if (e.name === 'NotFoundError') return 'No device chosen. If your Folio wasn\'t in the list, check Bluetooth and Location are on and the light is on, then try again.';
   if (e.name === 'SecurityError') return 'This page isn\'t allowed to use Bluetooth. Open it directly in Chrome (not inside another app).';
   if (e.name === 'NetworkError') return 'Lost the Bluetooth connection. Press the Folio\'s button and try again.';
-  if (e instanceof DeviceError && e.code === 7) return 'The Folio doesn\'t recognise this app\'s key (it may have been paired with Inkspace or another phone). Tap "Pair again".';
+  if (e instanceof DeviceError && e.code === 7) return 'The Folio doesn\'t recognise this app\'s key (it may have been paired with Inkspace or another phone). Open Settings & device and tap "Pair again".';
   if (e instanceof DeviceError && e.code === 2) return 'The Folio isn\'t ready. Press its button once and try again.';
   return e.message || String(e);
 }
@@ -571,23 +580,90 @@ async function pair(all = false) {
     S.dev = { id: device.id, key, proto, name, ...dm, fw };
     lsSet('folio.device', S.dev);
     log('paired: ' + JSON.stringify(S.dev));
-    setStatus(`Paired with ${name}. Draw a page, press the button to save it, then tap Sync pages.`, 'ok', 'on');
+    setStatus(`Paired with ${name}. That's done for good: from now on just save pages with the button and sync.`, 'ok', 'on');
   } catch (e) {
     log('pair failed: ' + (e.stack || e));
     setStatus(friendlyError(e), 'err', '');
-  } finally { L && L.disconnect(); S.busy = false; renderChrome(); }
+  } finally { L && L.disconnect(); S.busy = false; renderChrome(); if (S.dev) startWatching(); }
 }
 
-async function sync() {
+// ---------- remembered device + automatic sync ----------
+// Chrome can hand back a device the user already picked once (getDevices), so
+// later syncs skip the device list. watchAdvertisements tells us when the
+// Folio wakes up (button press), which drives automatic sync.
+const Auto = { device: null, watching: false, abort: null, lastAdv: 0, lastSync: 0, support: { get: false, watch: false } };
+
+async function rememberedDevice() {
+  if (!S.dev || !navigator.bluetooth?.getDevices) return null;
+  try {
+    const list = await navigator.bluetooth.getDevices();
+    return list.find(x => x.id === S.dev.id) || (list.length === 1 ? list[0] : null);
+  } catch (e) { log('getDevices failed: ' + e.message); return null; }
+}
+
+async function startWatching() {
+  const dev = await rememberedDevice();
+  Auto.device = dev;
+  Auto.support.get = !!navigator.bluetooth?.getDevices;
+  Auto.support.watch = !!(dev && dev.watchAdvertisements);
+  renderAutoNote();
+  if (!dev || !dev.watchAdvertisements || Auto.watching) return;
+  if (!dev.__folioListener) {
+    dev.addEventListener('advertisementreceived', () => {
+      Auto.lastAdv = Date.now();
+      if (S.auto && !S.busy && Date.now() - Auto.lastSync > 20000 && document.visibilityState === 'visible') {
+        log('Folio is awake → automatic sync');
+        sync({ auto: true });
+      }
+    });
+    dev.__folioListener = true;
+  }
+  try {
+    Auto.abort = new AbortController();
+    await dev.watchAdvertisements({ signal: Auto.abort.signal });
+    Auto.watching = true; log('watching for the Folio');
+  } catch (e) { Auto.support.watch = false; log('watchAdvertisements unavailable: ' + e.message); renderAutoNote(); }
+}
+function stopWatching() { try { Auto.abort?.abort(); } catch {} Auto.watching = false; }
+
+function renderAutoNote() {
+  const n = $('autoNote');
+  if (!S.dev) { n.hidden = true; return; }
+  if (Auto.device && Auto.support.watch) { n.hidden = true; return; }
+  if (Auto.device) { n.hidden = false; n.textContent = 'Sync opens straight away without the device list. Automatic sync needs one Chrome setting: open chrome://flags, turn on "Experimental Web Platform features", and restart Chrome.'; return; }
+  n.hidden = false;
+  n.textContent = 'Your pairing is saved, so you never need to pair again. This version of Chrome still shows the device list each time you sync: just tap your Folio. To skip the list and allow automatic sync, open chrome://flags, turn on "Experimental Web Platform features" and "Use the new permissions backend for Web Bluetooth", then restart Chrome.';
+}
+
+function waitForAdvert(ms) {
+  if (!Auto.watching) return Promise.resolve(false);
+  const since = Date.now();
+  if (since - Auto.lastAdv < 8000) return Promise.resolve(true);
+  return new Promise(res => {
+    const t = setInterval(() => { if (Auto.lastAdv > since) { clearInterval(t); res(true); } else if (Date.now() - since > ms) { clearInterval(t); res(false); } }, 200);
+  });
+}
+
+async function sync(opts = {}) {
+  const auto = !!opts.auto;
   if (S.busy || !S.dev) return; S.busy = true; renderChrome();
   const d = S.dev; let L; let got = 0;
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
   try {
-    setStatus('Choose your Folio in the list…', '', 'amber');
-    const device = await pickDevice();
-    if (device.id !== d.id) log(`note: chosen device id ${device.id} differs from paired id ${d.id}; trying stored key anyway`);
+    let device = await rememberedDevice();
+    if (device) {
+      if (!auto && Auto.watching) {
+        setStatus('Press the Folio\'s button once to wake it…', '', 'amber');
+        await waitForAdvert(20000);
+      }
+    } else {
+      if (auto) return;
+      setStatus('Tap your Folio in the list…', '', 'amber');
+      device = await pickDevice();
+      if (device.id !== d.id) { log(`device id changed ${d.id} → ${device.id}; keeping pairing key`); d.id = device.id; lsSet('folio.device', d); }
+    }
     L = new WacomLink(device);
-    setStatus('Connecting…', '', 'amber');
+    setStatus(auto ? 'Folio woke up, syncing…' : 'Connecting…', '', 'amber');
     await L.connect();
     await Proto.connectWithKey(L, d.key, d.proto);
     if (d.proto === P.SPARK) { try { await L.req(0xe3, [0]); } catch (e) { log('e3: ' + e.message); } }
@@ -646,7 +722,11 @@ async function sync() {
     log('sync failed: ' + (e.stack || e));
     setProgress(null);
     setStatus((got ? `Saved ${got} page${got === 1 ? '' : 's'}, then stopped: ` : '') + friendlyError(e), 'err', '');
-  } finally { try { wake && wake.release(); } catch {} L && L.disconnect(); S.busy = false; renderChrome(); await loadPages(); }
+  } finally {
+    try { wake && wake.release(); } catch {} L && L.disconnect();
+    Auto.lastSync = Date.now(); S.busy = false; renderChrome(); await loadPages();
+    if (!Auto.watching) startWatching();
+  }
 }
 
 // ---------- drawing ----------
@@ -821,8 +901,11 @@ window.addEventListener('resize', () => S.viewing && drawViewer());
 // ---------- wiring ----------
 $('btnPair').onclick = () => pair(false);
 $('btnAllDevices').onclick = () => pair(true);
-$('btnRepair').onclick = () => { S.dev = null; renderChrome(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-$('btnSync').onclick = sync;
+$('btnRepair').onclick = () => { stopWatching(); S.dev = null; renderChrome(); $('settings').open = false; window.scrollTo({ top: 0, behavior: 'smooth' }); };
+$('autoSync').checked = S.auto;
+$('autoSync').onchange = e => { S.auto = e.target.checked; lsSet('folio.auto', S.auto); if (S.auto) startWatching(); };
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.dev) { Auto.watching = false; startWatching(); } });
+$('btnSync').onclick = () => sync();
 $('btnSelect').onclick = () => { S.selecting = true; S.sel.clear(); renderGrid(); };
 $('btnSelDone').onclick = () => { S.selecting = false; S.sel.clear(); renderGrid(); };
 $('btnSelAll').onclick = () => { S.pages.forEach(p => S.sel.add(p.id)); renderGrid(); };
@@ -833,7 +916,7 @@ $('thick').value = S.thick;
 $('thick').oninput = e => { S.thick = +e.target.value; lsSet('folio.thick', S.thick); renderGrid(); };
 $('btnCopyLog').onclick = async () => { const t = LOG.join('\n') || '(empty)'; try { await navigator.clipboard.writeText(t); toast('Log copied'); } catch { const r = document.createRange(); r.selectNodeContents($('log')); getSelection().removeAllRanges(); getSelection().addRange(r); toast('Log selected, copy it manually'); } };
 $('btnCopyKey').onclick = async () => { try { await navigator.clipboard.writeText(hex(S.dev.key).replace(/ /g, '')); toast('Device key copied'); } catch { toast('Couldn\'t copy'); } };
-$('btnForget').onclick = () => confirmSheet('Forget this Folio?', 'Your pages stay here. You\'ll need to pair again (hold the button 6 s) before the next sync.', 'Forget', async () => { S.dev = null; S.battery = null; lsSet('folio.device', null); renderChrome(); });
+$('btnForget').onclick = () => confirmSheet('Forget this Folio?', 'Your pages stay here. You\'ll need to pair again (hold the button 6 s) before the next sync.', 'Forget', async () => { stopWatching(); S.dev = null; S.battery = null; lsSet('folio.device', null); renderChrome(); });
 $('settings').addEventListener('toggle', () => { if ($('settings').open) { $('log').textContent = LOG.slice(-400).join('\n') || 'Nothing yet.'; } });
 
 (async function init() {
@@ -847,6 +930,7 @@ $('settings').addEventListener('toggle', () => { if ($('settings').open) { $('lo
   await Store.open();
   if (!Store.ok) setStatus('This browser won\'t let the page store data, so synced pages will only last until you close it. Avoid private/incognito mode.', 'err');
   renderChrome(); await loadPages();
+  if (S.dev && navigator.bluetooth) startWatching();
 })();
 </script>
 </body>
